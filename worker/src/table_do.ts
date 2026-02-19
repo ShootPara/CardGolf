@@ -1,34 +1,35 @@
 /**
- * FILE: /worker/src/table_do.ts (NEW)
+ * FILE: /worker/src/table_do.ts (REPLACE)
  *
  * Durable Object: one instance per table.
  * v0 backend skeleton:
  * - WebSocket join/leave
  * - owner: delegate, mute, kick
- * - spectator chat allowed flag (set at create time later; default true for now)
+ * - spectators + spectator chat permission (default allow; later locked at create-table)
  * - ephemeral chat ring buffer (dies when table dies)
  *
- * Gameplay is intentionally NOT implemented yet.
+ * Gameplay intentionally NOT implemented yet.
  */
 
+import {
+  safeJsonParse,
+  type ClientToServer,
+  type ServerToClient,
+  type Role,
+  type ChatMessage,
+} from "./protocol";
+
 /* =========================
-   Imports
+   Env bindings
 ========================= */
-
-import { safeJsonParse, type ClientToServer, type ServerToClient, type Role, type ChatMessage } from "./protocol";
-
-/* =========================
-   Types
-========================= */
-
 export interface Env {
-  // DO namespace binding from wrangler.jsonc
   TABLES: DurableObjectNamespace;
-
-  // D1 binding name from wrangler.jsonc (you set it to "cardgolf")
-  cardgolf: D1Database;
+  cardgolf: D1Database; // D1 binding name from wrangler.jsonc
 }
 
+/* =========================
+   Internal types
+========================= */
 type PlayerConn = {
   playerId: string;
   email: string;
@@ -47,50 +48,44 @@ type SpectatorConn = {
 
 type TableState = {
   tableId: string;
-
   ownerPlayerId: string | null;
 
-  // Join order matters for ownership transfer on owner leave
+  // Join order matters for ownership transfer when owner leaves
   players: PlayerConn[];
   spectators: SpectatorConn[];
 
   mutedPlayers: Set<string>;
   mutedSpectators: Set<string>;
 
-  spectatorChatAllowed: boolean;
-
-  // Lobby only for now
+  spectatorChatAllowed: boolean; // set at table creation later; default allow for now
   phase: "lobby";
 
-  // Ephemeral chat (ring buffer)
+  // Ephemeral chat buffer (dies with DO)
   chat: ChatMessage[];
 };
 
 /* =========================
    Constants
 ========================= */
-
 const CHAT_MAX = 200;
 const CHAT_MAX_LEN = 280;
-const CHAT_RATE_MS = 1000; // basic spam control per connection
+const CHAT_RATE_MS = 1000;
 
 /* =========================
    Durable Object
 ========================= */
-
 export class TableDO {
   private state: DurableObjectState;
   private env: Env;
+
   private table: TableState;
 
-  // simple per-socket rate limiting
   private lastChatAtBySocket = new WeakMap<WebSocket, number>();
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
 
-    // Table ID is derived from DO name (set by router)
     const tableId = state.id.toString();
 
     this.table = {
@@ -100,20 +95,18 @@ export class TableDO {
       spectators: [],
       mutedPlayers: new Set(),
       mutedSpectators: new Set(),
-      spectatorChatAllowed: true, // locked at table setup later; default allow
+      spectatorChatAllowed: true,
       phase: "lobby",
       chat: [],
     };
   }
 
   /* =========================
-     Entry: DO fetch
+     DO fetch
   ========================= */
-
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // Only endpoint for now: /ws (WebSocket upgrade required)
     if (url.pathname !== "/ws") {
       return new Response("Not found", { status: 404 });
     }
@@ -122,39 +115,48 @@ export class TableDO {
       return new Response("Expected WebSocket", { status: 426 });
     }
 
-    const email = readUserEmail(request);
-    if (!email) {
-      return json({ ok: false, error: "Missing authenticated email header" }, 401);
+    const userEmail = readUserEmail(request);
+    if (!userEmail) {
+      return json(
+        { ok: false, error: "Missing authenticated email (Access header) or dev_email on localhost" },
+        401
+      );
     }
 
-    // Determine requested role from query param (default player)
     const roleParam = (url.searchParams.get("role") ?? "player") as Role;
     const role: Role = roleParam === "spectator" ? "spectator" : "player";
 
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
-
     server.accept();
 
-    // Allocate identity
     if (role === "player") {
-      const playerId = makeStableId(email);
+      const playerId = makeStableId(userEmail);
       const joinedAt = new Date().toISOString();
 
-      this.table.players.push({ playerId, email, role: "player", ws: server, joinedAt });
+      // Add connection
+      this.table.players.push({
+        playerId,
+        email: userEmail,
+        role: "player",
+        ws: server,
+        joinedAt,
+      });
 
-      // Owner assignment (first player becomes owner)
+      // First player becomes owner
       if (!this.table.ownerPlayerId) {
         this.table.ownerPlayerId = playerId;
       }
 
-      this.bindSocket(server, { id: playerId, role, email });
+      this.bindSocket(server, { id: playerId, role, email: userEmail });
+
+      // Welcome + initial chat + state
       this.send(server, {
         type: "WELCOME",
         payload: {
           tableId: this.table.tableId,
-          you: { playerId, email, role },
+          you: { playerId, email: userEmail, role },
           ownerPlayerId: this.table.ownerPlayerId,
           spectatorChatAllowed: this.table.spectatorChatAllowed,
         },
@@ -163,33 +165,39 @@ export class TableDO {
       const spectatorId = makeEphemeralId("spec");
       const joinedAt = new Date().toISOString();
 
-      this.table.spectators.push({ spectatorId, email, role: "spectator", ws: server, joinedAt });
+      this.table.spectators.push({
+        spectatorId,
+        email: userEmail,
+        role: "spectator",
+        ws: server,
+        joinedAt,
+      });
 
-      this.bindSocket(server, { id: spectatorId, role, email });
+      this.bindSocket(server, { id: spectatorId, role, email: userEmail });
+
       this.send(server, {
         type: "WELCOME",
         payload: {
           tableId: this.table.tableId,
-          you: { playerId: spectatorId, email, role },
+          you: { playerId: spectatorId, email: userEmail, role },
           ownerPlayerId: this.table.ownerPlayerId,
           spectatorChatAllowed: this.table.spectatorChatAllowed,
         },
       });
     }
 
-    // Send initial chat buffer
+    // Send current chat buffer
     this.send(server, { type: "CHAT_STATE", payload: { messages: this.table.chat } });
 
-    // Broadcast updated state
+    // Broadcast updated state to everyone
     this.broadcastState();
 
     return new Response(null, { status: 101, webSocket: client });
   }
 
   /* =========================
-     Socket binding + handlers
+     Socket handlers
   ========================= */
-
   private bindSocket(ws: WebSocket, who: { id: string; role: Role; email: string }) {
     ws.addEventListener("message", (evt) => {
       const raw = typeof evt.data === "string" ? evt.data : "";
@@ -200,13 +208,8 @@ export class TableDO {
       void this.onMessage(ws, who, parsed.value);
     });
 
-    ws.addEventListener("close", () => {
-      this.onClose(who);
-    });
-
-    ws.addEventListener("error", () => {
-      this.onClose(who);
-    });
+    ws.addEventListener("close", () => this.onClose(who));
+    ws.addEventListener("error", () => this.onClose(who));
   }
 
   private async onMessage(ws: WebSocket, who: { id: string; role: Role; email: string }, msg: ClientToServer) {
@@ -229,12 +232,11 @@ export class TableDO {
       case "KICK":
         return this.handleKick(ws, who, msg.payload?.targetId, msg.payload?.targetRole);
 
-      // HELLO is optional for now (we already know role); keep for future client versions
       case "HELLO":
-        return;
+        return; // reserved for future versioning
 
       default:
-        return this.send(ws, { type: "ERROR", payload: { code: "UNKNOWN", message: "Unknown message type" } });
+        return this.err(ws, "UNKNOWN", "Unknown message type");
     }
   }
 
@@ -243,10 +245,9 @@ export class TableDO {
       const idx = this.table.players.findIndex((p) => p.playerId === who.id);
       if (idx >= 0) {
         const leaving = this.table.players[idx];
-        // remove player
         this.table.players.splice(idx, 1);
 
-        // ownership transfer if needed
+        // Ownership transfer if owner left
         if (this.table.ownerPlayerId === leaving.playerId) {
           this.table.ownerPlayerId = this.table.players.length > 0 ? this.table.players[0].playerId : null;
         }
@@ -257,15 +258,11 @@ export class TableDO {
     }
 
     this.broadcastState();
-
-    // NOTE: We intentionally do NOT persist anything.
-    // When the last connection leaves, Cloudflare may evict the DO later; chat dies with it (desired).
   }
 
   /* =========================
-     Owner Actions
+     Owner controls
   ========================= */
-
   private isOwner(who: { id: string; role: Role }) {
     return who.role === "player" && this.table.ownerPlayerId === who.id;
   }
@@ -274,8 +271,8 @@ export class TableDO {
     if (!this.isOwner(who)) return this.err(ws, "NOT_OWNER", "Only the table owner can delegate ownership.");
     if (!toPlayerId) return this.err(ws, "BAD_REQUEST", "Missing toPlayerId.");
 
-    const exists = this.table.players.some((p) => p.playerId === toPlayerId);
-    if (!exists) return this.err(ws, "BAD_REQUEST", "Target must be an active player (not spectator).");
+    const isActivePlayer = this.table.players.some((p) => p.playerId === toPlayerId);
+    if (!isActivePlayer) return this.err(ws, "BAD_REQUEST", "Target must be an active player (not spectator).");
 
     this.table.ownerPlayerId = toPlayerId;
     this.broadcastState();
@@ -305,7 +302,7 @@ export class TableDO {
     if (!this.isOwner(who)) return this.err(ws, "NOT_OWNER", "Only the table owner can kick.");
     if (!targetId || !targetRole) return this.err(ws, "BAD_REQUEST", "Missing target.");
 
-    // owner cannot kick themselves
+    // Owner cannot kick themselves
     if (targetRole === "player" && targetId === this.table.ownerPlayerId) {
       return this.err(ws, "BAD_REQUEST", "Owner cannot kick themselves.");
     }
@@ -328,7 +325,7 @@ export class TableDO {
       this.table.spectators.splice(idx, 1);
     }
 
-    // If owner left by kick isn't possible, but if owner is gone by other means, transfer happens on close handler.
+    // If ownership became invalid for any reason, transfer to oldest remaining player
     if (this.table.ownerPlayerId && !this.table.players.some((p) => p.playerId === this.table.ownerPlayerId)) {
       this.table.ownerPlayerId = this.table.players.length > 0 ? this.table.players[0].playerId : null;
     }
@@ -339,32 +336,24 @@ export class TableDO {
   /* =========================
      Chat
   ========================= */
-
   private handleChat(ws: WebSocket, who: { id: string; role: Role; email: string }, text?: string) {
     if (!text) return this.err(ws, "BAD_REQUEST", "Missing chat text.");
+
     const trimmed = text.trim();
     if (!trimmed) return this.err(ws, "BAD_REQUEST", "Empty chat text.");
     if (trimmed.length > CHAT_MAX_LEN) return this.err(ws, "BAD_REQUEST", `Chat too long (max ${CHAT_MAX_LEN}).`);
 
-    // Spectator chat permission
     if (who.role === "spectator" && !this.table.spectatorChatAllowed) {
       return this.err(ws, "CHAT_DISABLED", "Spectator chat is disabled for this table.");
     }
 
-    // Mute checks
-    if (who.role === "player" && this.table.mutedPlayers.has(who.id)) {
-      return this.err(ws, "MUTED", "You are muted.");
-    }
-    if (who.role === "spectator" && this.table.mutedSpectators.has(who.id)) {
-      return this.err(ws, "MUTED", "You are muted.");
-    }
+    if (who.role === "player" && this.table.mutedPlayers.has(who.id)) return this.err(ws, "MUTED", "You are muted.");
+    if (who.role === "spectator" && this.table.mutedSpectators.has(who.id)) return this.err(ws, "MUTED", "You are muted.");
 
-    // Rate limit
+    // Rate limit per socket
     const now = Date.now();
     const last = this.lastChatAtBySocket.get(ws) ?? 0;
-    if (now - last < CHAT_RATE_MS) {
-      return this.err(ws, "RATE_LIMIT", "Too fast.");
-    }
+    if (now - last < CHAT_RATE_MS) return this.err(ws, "RATE_LIMIT", "Too fast.");
     this.lastChatAtBySocket.set(ws, now);
 
     const msg: ChatMessage = {
@@ -383,11 +372,10 @@ export class TableDO {
   }
 
   /* =========================
-     State Broadcasting
+     Broadcast helpers
   ========================= */
-
   private broadcastState() {
-    const payload: ServerToClient = {
+    const msg: ServerToClient = {
       type: "TABLE_STATE",
       payload: {
         tableId: this.table.tableId,
@@ -400,13 +388,13 @@ export class TableDO {
         spectatorChatAllowed: this.table.spectatorChatAllowed,
       },
     };
-    this.broadcast(payload);
+    this.broadcast(msg);
   }
 
   private broadcast(msg: ServerToClient) {
-    const jsonStr = JSON.stringify(msg);
-    for (const p of this.table.players) safeSend(p.ws, jsonStr);
-    for (const s of this.table.spectators) safeSend(s.ws, jsonStr);
+    const s = JSON.stringify(msg);
+    for (const p of this.table.players) safeSend(p.ws, s);
+    for (const sp of this.table.spectators) safeSend(sp.ws, s);
   }
 
   private send(ws: WebSocket, msg: ServerToClient) {
@@ -419,9 +407,8 @@ export class TableDO {
 }
 
 /* =========================
-   Helpers
+   Utility helpers
 ========================= */
-
 function json(obj: unknown, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
@@ -436,8 +423,18 @@ function safeSend(ws: WebSocket, data: string) {
 }
 
 function readUserEmail(req: Request): string | null {
-  // Cloudflare Access commonly provides this header when you protect the app:
-  // cf-access-authenticated-user-email
+  const url = new URL(req.url);
+
+  // Local dev bypass: browsers can't set WS headers.
+  const host = url.hostname;
+  const isLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
+
+  if (isLocal) {
+    const devEmail = (url.searchParams.get("dev_email") ?? "").trim();
+    if (devEmail) return devEmail;
+  }
+
+  // Production: Cloudflare Access header
   const h =
     req.headers.get("cf-access-authenticated-user-email") ||
     req.headers.get("Cf-Access-Authenticated-User-Email") ||
@@ -448,7 +445,6 @@ function readUserEmail(req: Request): string | null {
 }
 
 function makeStableId(email: string): string {
-  // stable enough for v0; replace with real UUID in DB later if you want
   return "p_" + simpleHash(email.toLowerCase());
 }
 
@@ -457,7 +453,6 @@ function makeEphemeralId(prefix: string): string {
 }
 
 function simpleHash(s: string): string {
-  // tiny non-crypto hash (do NOT use as security boundary)
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
