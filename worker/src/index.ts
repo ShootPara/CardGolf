@@ -1,64 +1,53 @@
-import { DurableObject } from "cloudflare:workers";
-
 /**
- * Welcome to Cloudflare Workers! This is your first Durable Objects application.
+ * FILE: /worker/src/index.ts (REPLACE)
  *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your Durable Object in action
- * - Run `npm run deploy` to publish your application
+ * Routes:
+ * - GET /health                     simple check
+ * - GET /ws/table/:tableId?role=...  upgrades to WebSocket handled by TableDO
  *
- * Bind resources to your worker in `wrangler.jsonc`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/durable-objects
+ * Notes:
+ * - Table state is in Durable Object memory only.
+ * - D1 is bound as env.cardgolf (we will use it later for stats).
  */
 
-/** A Durable Object's behavior is defined in an exported Javascript class */
-export class MyDurableObject extends DurableObject<Env> {
-	/**
-	 * The constructor is invoked once upon creation of the Durable Object, i.e. the first call to
-	 * 	`DurableObjectStub::get` for a given identifier (no-op constructors can be omitted)
-	 *
-	 * @param ctx - The interface for interacting with Durable Object state
-	 * @param env - The interface to reference bindings declared in wrangler.jsonc
-	 */
-	constructor(ctx: DurableObjectState, env: Env) {
-		super(ctx, env);
-	}
+import { TableDO, type Env } from "./table_do";
 
-	/**
-	 * The Durable Object exposes an RPC method sayHello which will be invoked when a Durable
-	 *  Object instance receives a request from a Worker via the same method invocation on the stub
-	 *
-	 * @param name - The name provided to a Durable Object instance from a Worker
-	 * @returns The greeting to be sent back to the Worker
-	 */
-	async sayHello(name: string): Promise<string> {
-		return `Hello, ${name}!`;
-	}
-}
+/* =========================
+   Worker Entrypoint
+========================= */
 
 export default {
-	/**
-	 * This is the standard fetch handler for a Cloudflare Worker
-	 *
-	 * @param request - The request submitted to the Worker from the client
-	 * @param env - The interface to reference bindings declared in wrangler.jsonc
-	 * @param ctx - The execution context of the Worker
-	 * @returns The response to be sent back to the client
-	 */
-	async fetch(request, env, ctx): Promise<Response> {
-		// Create a stub to open a communication channel with the Durable Object
-		// instance named "foo".
-		//
-		// Requests from all Workers to the Durable Object instance named "foo"
-		// will go to a single remote Durable Object instance.
-		const stub = env.MY_DURABLE_OBJECT.getByName("foo");
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
 
-		// Call the `sayHello()` RPC method on the stub to invoke the method on
-		// the remote Durable Object instance.
-		const greeting = await stub.sayHello("world");
+    if (url.pathname === "/health") {
+      return new Response("ok", { status: 200 });
+    }
 
-		return new Response(greeting);
-	},
-} satisfies ExportedHandler<Env>;
+    // WebSocket table endpoint: /ws/table/:tableId
+    // Example:
+    //   wss://<worker>/ws/table/abc123?role=player
+    //   wss://<worker>/ws/table/abc123?role=spectator
+    if (url.pathname.startsWith("/ws/table/")) {
+      const tableId = url.pathname.replace("/ws/table/", "").trim();
+      if (!tableId) return new Response("Missing tableId", { status: 400 });
+
+      const id = env.TABLES.idFromName(tableId);
+      const stub = env.TABLES.get(id);
+
+      // Forward request to the DO; DO expects /ws
+      const doUrl = new URL(request.url);
+      doUrl.pathname = "/ws";
+
+      return stub.fetch(doUrl.toString(), request);
+    }
+
+    return new Response("Not found", { status: 404 });
+  },
+};
+
+/* =========================
+   Durable Objects Exports
+========================= */
+
+export { TableDO };
