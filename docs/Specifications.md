@@ -6,6 +6,17 @@ Auth: Cloudflare Zero Trust (Google OAuth)
 
 ---
 
+# 0. Implementation Notes (Important)
+
+This spec uses the term “initial peek count” from the rules JSON field name, but **gameplay is NO PRIVATE PEEKS**:
+- Cards are face-down for everyone until revealed.
+- “Initial peek count” is treated as **initial reveal count** (players must reveal that many cards at the start of the game / round).
+
+Validator constraint currently enforced by backend:
+- If `endConditions.mode == "holes"`, then `maxRounds` must be **9**.
+
+---
+
 # 1. Purpose
 
 A browser-based multiplayer implementation of 6-card Golf using:
@@ -53,21 +64,29 @@ No active match persistence. If the table empties, it is destroyed.
 
 ## 4.1 Variant
 - 6-card Golf (2x3 grid)
-- Initial peek count: 2
+- **Initial reveal count: 2** (field name in rules JSON is `initialPeekCount`)
 - Deck count: 2 (fixed, not configurable)
+
+Grid layout / positions:
+|1|3|5|
+|2|4|6|
 
 ## 4.2 Column Rule
 - If two cards in the same column match, that column scores 0 points
 - Always enabled
 - Match applies only at scoring (end of round)
+- **Match means same RANK, not same point value** (e.g., J and Q are not a match even if both score 10)
 - Player may break a match during play
 
 ---
 
 # 5. Turn Flow
 
-## 5.1 Start of Turn
+## 5.1 Start-of-Game / Start-of-Round
+On a player’s first turn of a round:
+- Player must reveal exactly 2 face-down cards (initial reveals) before they may draw.
 
+## 5.2 Start of Turn (normal play)
 Player may:
 - Click draw pile
 - Click discard pile
@@ -75,16 +94,13 @@ Player may:
 
 ---
 
-## 5.2 After Drawing
-
-The drawn card is revealed to everyone.
+## 5.3 After Drawing
 
 Player must:
 - Click a card in their grid to swap
 - Or click discard pile to discard drawn card
 
 ### Swapping Rules
-
 If swapping with face-up card:
 - Face-up card goes to discard
 - Drawn card replaces it face-up
@@ -92,7 +108,7 @@ If swapping with face-up card:
 If swapping with face-down card:
 - Face-down card is revealed
 - That revealed card goes to discard
-- Drawn card replaces it
+- Drawn card replaces it face-up
 
 ### If discarding drawn card:
 - Player must reveal one face-down card
@@ -100,45 +116,42 @@ If swapping with face-down card:
 
 ---
 
-## 5.3 Reveal Without Drawing
-
+## 5.4 Reveal Without Drawing
 Player may reveal a face-down card without drawing.
 Turn ends immediately.
 
 If that was their last face-down card:
-- Game ends
+- Round end trigger occurs
 - Final turn phase begins
 
 ---
 
-## 5.4 Pass Rule
-
+## 5.5 Pass Rule
 Pass is allowed ONLY if:
-
 - Game is not in final-turn phase
 - Player has exactly one face-down card remaining
-- Player drew and discarded during the turn
+- Player drew during the turn and is discarding the drawn card
 - Player did not reveal a card this turn
 
 Pass:
 - Ends turn
 - Does not reveal final card
-- Does not end the game
+- Does not end the round
 
 Pass is NOT allowed during final-turn phase.
 
 ---
 
-# 6. End of Game
+# 6. End of Round / Final Turn Phase
 
-Game ends when:
+Round end trigger:
 - A player intentionally reveals their last face-down card.
 
 Then:
 - All other players get exactly one final turn.
 - During final-turn phase:
   - Pass is disabled.
-  - At end of each player’s final turn, all remaining face-down cards automatically flip face-up.
+  - After the final-turn phase completes, all remaining face-down cards automatically flip face-up (if any remain).
 
 ---
 
@@ -157,11 +170,9 @@ Scoring happens only at end of round after all cards are revealed.
 
 Custom mappings allowed at table creation.
 
-## 7.3 Points Mode
-- Target default: 100
-- When a player reaches/exceeds target:
-  - Finish round
-  - Lowest cumulative score wins
+## 7.3 Mode Support
+- Holes mode: play exactly 9 rounds (validator-enforced currently).
+- Points mode (target-based) is planned but not implemented in current backend milestones.
 
 ## 7.4 Ties
 - Ties allowed
@@ -169,8 +180,7 @@ Custom mappings allowed at table creation.
 
 ---
 
-# 8. Draw Pile Exhaustion
-
+# 8. Draw Pile Exhaustion (Planned)
 If draw pile is empty:
 1. Remove top card from discard pile
 2. Shuffle remaining discard pile
@@ -180,7 +190,6 @@ If draw pile is empty:
 ---
 
 # 9. Leave / Kick Mid-Game
-
 If a player leaves or is kicked:
 - Removed from turn order
 - Cards not revealed
@@ -194,7 +203,6 @@ If only one player remains:
 ---
 
 # 10. Chat
-
 - Lives only while at least one player connected
 - Stored in DO memory only
 - Destroyed when table empty
@@ -210,77 +218,26 @@ If only one player remains:
 - Hover glow effect
 
 ## 11.2 Help Card (Dynamic)
+Start of round (first turn only):
+> Reveal 2 cards in your grid to begin.
 
 Start of turn:
-> Click the draw pile or discard pile to take a card, or reveal a card in your hand to end your turn immediately.
+> Click the draw pile or discard pile to take a card, or reveal a card in your grid to end your turn immediately.
 
 After drawing:
-> Click a card in your grid to swap, or click the discard pile to discard the drawn card.
+> Click a card in your grid to swap, or click the discard pile to discard the drawn card (then reveal one face-down card).
 
 Last card:
-> You may reveal your last card to end the game, or click Pass to continue playing.
+> You may reveal your last card to end the round, or click Pass (after drawing) to continue playing.
 
 Final turn:
-> Final turn: reveal or swap cards. All remaining face-down cards will flip after your turn.
+> Final turn: pass is disabled. Play your last turn normally.
 
-## 11.3 Confirmation Modal
-
+## 11.3 Confirmation Modal (Planned)
 When revealing final card:
-> “Revealing your last card ends the game for everyone. Do you wish to continue?”
+> “Revealing your last card ends the round for everyone. Do you wish to continue?”
 
 ---
 
 # 12. Persistence (D1)
-
-## players
-- player_id
-- email
-- display_name
-- last_table_rules_json
-- wins_total
-- losses_total
-- created_at
-
-## games
-- game_id
-- created_at
-- ended_at
-- duration_seconds
-- mode
-- target_points
-- rules_json
-- creator_player_id
-
-## game_players
-- game_id
-- player_id
-- final_score
-- is_winner
-
-## player_monthly_stats
-- player_id
-- year_month
-- games_played
-- wins
-- losses
-- lowest_score
-- highest_score
-
-## global_stats
-- total_games
-- longest_game_seconds
-- longest_game_id
-- highest_games_in_one_day
-- highest_games_in_one_day_date
-
-Stats written only at valid game completion.
-
----
-
-# 13. Definition of Done
-
-All gameplay deterministic.
-No open decisions.
-No configurable deck count.
-No passing during final turn.
-No spectator-to-player transitions after start.
+(stats schema unchanged; implemented later)

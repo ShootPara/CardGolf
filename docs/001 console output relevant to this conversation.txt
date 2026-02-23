@@ -1,0 +1,111 @@
+TABLE: y9ivmefn-zlzit6
+VM100:46 P1 open
+VM100:54 P1 <- WELCOME playerId p_b8c1d821
+VM100:81 P1 <- {"type":"CHAT_STATE","payload":{"messages":[]}}
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"open","phase":"lobby","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"open","phase":"lobby","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:46 P2 open
+VM100:54 P2 <- WELCOME playerId p_55a5a646
+VM100:81 P2 <- {"type":"CHAT_STATE","payload":{"messages":[]}}
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"open","phase":"lobby","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:81 P2 <- {"type":"GAME_STARTED","payload":{"tableId":"y9ivmefn-zlzit6"}}
+VM100:81 P1 <- {"type":"GAME_STARTED","payload":{"tableId":"y9ivmefn-zlzit6"}}
+VM100:65 P1 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:65 P2 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:121 START: 200 {"ok":true}
+VM100:40 P1 -> {type: 'REVEAL', payload: {…}}
+VM100:65 P2 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:65 P1 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:40 P1 -> {type: 'REVEAL', payload: {…}}
+VM100:65 P2 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:65 P1 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:40 P1 -> {type: 'DRAW_SHOE'}
+VM100:65 P1 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:65 P2 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:40 P1 -> {type: 'SWAP', payload: {…}}
+VM100:65 P2 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:65 P1 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:40 P2 -> {type: 'REVEAL', payload: {…}}
+VM100:65 P1 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:65 P2 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:40 P2 -> {type: 'REVEAL', payload: {…}}
+VM100:65 P2 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:65 P1 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:40 P2 -> {type: 'DRAW_SHOE'}
+VM100:65 P1 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:65 P2 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:40 P2 -> {type: 'DISCARD_DRAWN', payload: {…}}
+VM100:65 P1 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:65 P2 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:40 P1 -> {type: 'DRAW_SHOE'}
+VM100:65 P2 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:65 P1 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:40 P1 -> {type: 'SWAP', payload: {…}}
+VM100:65 P2 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:65 P1 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:40 P2 -> {type: 'DRAW_SHOE'}
+VM100:65 P1 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:65 P2 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:40 P2 -> {type: 'DISCARD_DRAWN', payload: {…}}
+VM100:65 P1 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:65 P2 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:40 P1 -> {type: 'DRAW_SHOE'}
+VM100:65 P2 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:65 P1 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:40 P1 -> {type: 'SWAP', payload: {…}}
+VM100:65 P1 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:65 P2 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:40 P2 -> {type: 'DRAW_SHOE'}
+VM100:65 P2 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:65 P1 <- GAME_STATE round 1 turn p_55a5a646 final false 0 triggerBy null scores? false
+VM100:40 P2 -> {type: 'DISCARD_DRAWN', payload: {…}}
+VM100:65 P1 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:65 P2 <- GAME_STATE round 1 turn p_b8c1d821 final false 0 triggerBy null scores? false
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:176 NEXT: P1 will end the round by REVEAL(pos:6) (not swap).
+VM100:40 P1 -> {type: 'REVEAL', payload: {…}}
+VM100:65 P1 <- GAME_STATE round 1 turn p_55a5a646 final true 1 triggerBy p_b8c1d821 scores? false
+VM100:65 P2 <- GAME_STATE round 1 turn p_55a5a646 final true 1 triggerBy p_b8c1d821 scores? false
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:183 Now final turn should be active (finalTurnActive true) and P2 should get exactly one final turn.
+VM100:184 P2 will take their final turn by DRAW_SHOE + DISCARD_DRAWN(revealPos:6).
+VM100:40 P2 -> {type: 'DRAW_SHOE'}
+VM100:65 P1 <- GAME_STATE round 1 turn p_55a5a646 final true 1 triggerBy p_b8c1d821 scores? false
+VM100:65 P2 <- GAME_STATE round 1 turn p_55a5a646 final true 1 triggerBy p_b8c1d821 scores? false
+VM100:40 P2 -> {type: 'DISCARD_DRAWN', payload: {…}}
+VM100:65 P2 <- GAME_STATE round 2 turn p_b8c1d821 final false 0 triggerBy null scores? true
+VM100:74 P2 lastRoundScores {p_b8c1d821: 26, p_55a5a646: 32}
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:65 P1 <- GAME_STATE round 2 turn p_b8c1d821 final false 0 triggerBy null scores? true
+VM100:74 P1 lastRoundScores {p_b8c1d821: 26, p_55a5a646: 32}
+VM100:65 P2 <- GAME_STATE round 2 turn p_b8c1d821 final false 0 triggerBy null scores? true
+VM100:74 P2 lastRoundScores {p_b8c1d821: 26, p_55a5a646: 32}
+VM100:81 P2 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:65 P1 <- GAME_STATE round 2 turn p_b8c1d821 final false 0 triggerBy null scores? true
+VM100:74 P1 lastRoundScores {p_b8c1d821: 26, p_55a5a646: 32}
+VM100:81 P1 <- {"type":"TABLE_STATE","payload":{"tableId":"y9ivmefn-zlzit6","status":"started","phase":"playing","ownerPlayerId":"p_b8c1d821","players":[{"playerId":"p_b8c1d821","email":"you@example.com","joinedAt":"2026-02-23T20:08:04.657Z"},{"playerId":"p_55a5a646","email":"p2@example.com","joinedAt":"2026-02-23T20:08:04.679Z"}],"spectators":[],"mutedPlayers":[],"mutedSpectators":[],"spectatorChatAllowed":true}}
+VM100:187 After P2 final turn, you should see lastRoundScores populate and round increment to 2.
+VM100:188 Sockets left open for manual poking in window.__cg.

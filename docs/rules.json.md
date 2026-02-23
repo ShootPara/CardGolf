@@ -4,12 +4,20 @@
   "gameVariant": {
     "variantId": "golf-6card",
     "grid": { "rows": 2, "cols": 3 },
+
+    // NOTE: Despite the name, current implementation treats this as:
+    // "initial reveal count" (global face-up flips), NOT private peeks.
     "initialPeekCount": 2,
+
+    // Spec says deck count is fixed at 2. Keep this value at 2.
     "deckCount": 2
   },
   "endConditions": {
     "mode": "holes",
+
+    // NOTE: Current validate_rules enforces holes mode requires maxRounds = 9.
     "maxRounds": 9,
+
     "pointsTarget": null,
     "roundEnd": {
       "trigger": "player_reveals_last_card",
