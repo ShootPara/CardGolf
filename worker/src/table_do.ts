@@ -478,6 +478,11 @@ export class TableDO {
       pg.initialRevealsRemaining = 2;
     }
 
+    // Seed discard with one face-up card for the new round
+    const firstDiscard = g.shoe.pop();
+    g.discard = firstDiscard ? [firstDiscard] : [];
+
+
     // Reset final turn meta
     g.roundMeta.finalTurnActive = false;
     g.roundMeta.triggeredByPlayerId = null;
@@ -503,8 +508,6 @@ export class TableDO {
     if (!pos || !ALL_POS.includes(pos)) return this.err(ws, "BAD_REQUEST", "pos must be 1..6.");
     if (pg.grid[pos].revealed) return this.err(ws, "BAD_STATE", "That card is already revealed.");
 
-    const wasInitialGate = pg.initialRevealsRemaining > 0;
-
     pg.grid[pos].revealed = true;
 
     // Consume initial reveals quota
@@ -512,11 +515,6 @@ export class TableDO {
 
     // Trigger final turn if this was their last face-down
     this.maybeTriggerFinalTurn(who.id);
-
-    // If we're NOT in the initial reveal gate, reveal ends the turn immediately (per spec)
-    if (!wasInitialGate) {
-      this.endTurnForPlayer(who.id);
-    }
 
     this.broadcastGameState();
     this.broadcastState();
@@ -698,9 +696,13 @@ export class TableDO {
       cumulative[p.playerId] = 0;
     }
 
+    // Seed discard with one face-up card (traditional: first player may draw discard immediately)
+    const firstDiscard = shoe.pop();
+    const discard = firstDiscard ? [firstDiscard] : [];
+
     return {
       shoe,
-      discard: [],
+      discard,
       players,
       round: 1,
       maxRounds,
