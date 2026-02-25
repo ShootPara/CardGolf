@@ -1,243 +1,330 @@
-# Golf (Card Game) — Multiplayer Web App Specification
-Version: 1.0 (Locked)
-Status: Implementation-Ready
-Stack: Cloudflare Workers + Durable Objects + D1 + React + PixiJS
-Auth: Cloudflare Zero Trust (Google OAuth)
+## CardGolf Worker + DO dev log — handover for next conversation (Milestone 3 completed)
+
+### Project goal
+
+Browser-based multiplayer “Golf” card game hosted on **Cloudflare Workers + Durable Objects** (live tables) with **D1** persistence (tables + future stats). UI will be React + PixiJS (not started here). Auth via Cloudflare Access (Google OAuth) with a **localhost fallback** `?dev_email=`.
 
 ---
 
-# 0. Implementation Notes (Important)
+# What we accomplished in this conversation
 
-This spec uses the term “initial peek count” from the rules JSON field name, but **gameplay is NO PRIVATE PEEKS**:
-- Cards are face-down for everyone until revealed.
-- “Initial peek count” is treated as **initial reveal count** (players must reveal that many cards at the start of the game / round).
+## 0) Confirmed core table lifecycle tests ✅
 
-Validator constraint currently enforced by backend:
-- If `endConditions.mode == "holes"`, then `maxRounds` must be **9**.
+**Test 1: started blocks new players**
 
----
+- After `POST /api/table/:id/start`, new player WS join gets **403**.
+    
+- Verified in console by handshake failure.
+    
 
-# 1. Purpose
+**Test 2: 7th player blocked**
 
-A browser-based multiplayer implementation of 6-card Golf using:
-- Authoritative Durable Object per table
-- Ephemeral in-memory match state
-- Persistent stats in D1
-- React (app shell) + PixiJS (table UI)
-
-No active match persistence. If the table empties, it is destroyed.
-
----
-
-# 2. Player Rules
-
-## 2.1 Player Limits
-- Minimum players to start: 2
-- Maximum players: 6
-- No bots
-
-## 2.2 Spectators
-- May join before game starts
-- Cannot become players after game starts
-- Default spectator chat: allowed
-- Spectator chat permission set at table creation and immutable afterward
+- Initially there was a race condition (P7 could sometimes get in and P6 get blocked).
+    
+- Fixed by adding a **pending player join reservation counter** inside the DO so gating is deterministic under concurrent joins.
+    
+- Retest: **P1–P6 welcomed, P7 403** consistently.
+    
 
 ---
 
-# 3. Table Owner
+## 1) Lobby + chat + ownership still working ✅
 
-## 3.1 Powers
-- Mute/unmute players
-- Mute/unmute spectators
-- Kick players
-- Kick spectators
-- Delegate ownership to another player
-
-## 3.2 Restrictions
-- Owner cannot kick themselves
-- If owner leaves, ownership transfers to oldest remaining player (by join time)
-- Owner has no gameplay advantages
+- WS join sends: `WELCOME`, `CHAT_STATE`, `TABLE_STATE`
+    
+- Chat uses ring buffer and broadcasts `CHAT_APPEND`
+    
+- Owner is first player; ownership transfers if owner leaves
+    
+- DO auto-deletes table row from D1 when last socket disconnects
+    
 
 ---
 
-# 4. Game Variant
+## 2) Gameplay Milestone 1/2 refactored to match the correct game rule model ✅
 
-## 4.1 Variant
-- 6-card Golf (2x3 grid)
-- **Initial reveal count: 2** (field name in rules JSON is `initialPeekCount`)
-- Deck count: 2 (fixed, not configurable)
+Important correction:
 
-Grid layout / positions:
+- There is **no “peek”** (no private information). Cards are face-down **for everyone** until globally revealed.
+    
+
+### Rule model implemented
+
+**Grid layout (positions):**
+
+```
 |1|3|5|
 |2|4|6|
+```
 
-## 4.2 Column Rule
-- If two cards in the same column match, that column scores 0 points
-- Always enabled
-- Match applies only at scoring (end of round)
-- **Match means same RANK, not same point value** (e.g., J and Q are not a match even if both score 10)
-- Player may break a match during play
+**Initial reveal rule (Rule #1):**
 
----
+- At the start of each round, each player has `initialRevealsRemaining = 2`.
+    
+- On their first turn they must `REVEAL` two cards before they can `DRAW_*`.
+    
 
-# 5. Turn Flow
+**Swap rule (Rule #2):**
 
-## 5.1 Start-of-Game / Start-of-Round
-On a player’s first turn of a round:
-- Player must reveal exactly 2 face-down cards (initial reveals) before they may draw.
+- Player draws a card, then `SWAP(pos)`:
+    
+    - swapped-in card becomes **face-up** in the grid
+        
+    - replaced card goes to discard face-up (`discardTop` updates)
+        
 
-## 5.2 Start of Turn (normal play)
-Player may:
-- Click draw pile
-- Click discard pile
-- Reveal a face-down card immediately
+**Discard drawn rule (Rule #3):**
 
----
-
-## 5.3 After Drawing
-
-Player must:
-- Click a card in their grid to swap
-- Or click discard pile to discard drawn card
-
-### Swapping Rules
-If swapping with face-up card:
-- Face-up card goes to discard
-- Drawn card replaces it face-up
-
-If swapping with face-down card:
-- Face-down card is revealed
-- That revealed card goes to discard
-- Drawn card replaces it face-up
-
-### If discarding drawn card:
-- Player must reveal one face-down card
-- That revealed card stays in place
+- If player draws and chooses not to use the card:
+    
+    - `DISCARD_DRAWN` requires also revealing a face-down card (`revealPos`) unless they are at the “last card” situation.
+        
+    - If player has exactly **1** face-down card left, they should use `PASS` to avoid revealing last card / ending the round.
+        
 
 ---
 
-## 5.4 Reveal Without Drawing
-Player may reveal a face-down card without drawing.
-Turn ends immediately.
+## 3) Gameplay Milestone 3 implemented + tested ✅ (Round end + final turn + scoring)
 
-If that was their last face-down card:
-- Round end trigger occurs
-- Final turn phase begins
+### End trigger
 
----
+- Round end is triggered when a player **reveals their last face-down card** (global reveals, not private).
+    
 
-## 5.5 Pass Rule
-Pass is allowed ONLY if:
-- Game is not in final-turn phase
-- Player has exactly one face-down card remaining
-- Player drew during the turn and is discarding the drawn card
-- Player did not reveal a card this turn
+### Final turn policy
 
-Pass:
-- Ends turn
-- Does not reveal final card
-- Does not end the round
+- When triggered:
+    
+    - `finalTurnActive = true`
+        
+    - `finalTurnsRemainingCount` starts as the number of players
+        
+    - each player gets **one more turn**
+        
+- `PASS` is **disabled during final turn** (enforced server-side)
+    
 
-Pass is NOT allowed during final-turn phase.
+### Auto-reveal + scoring + next round
 
----
+- After final turns complete:
+    
+    - auto-reveal remaining face-down cards
+        
+    - compute `lastRoundScores` per player
+        
+    - add to `cumulativeScores`
+        
+    - increment `round` and **deal a fresh round** (new shoe + deal, reset `initialRevealsRemaining = 2`)
+        
 
-# 6. End of Round / Final Turn Phase
+### Scoring rule locked in
 
-Round end trigger:
-- A player intentionally reveals their last face-down card.
+- Columns: (1,2), (3,4), (5,6)
+    
+- Column cancels to **0** if **same rank** (match = same card face, not same point value)
+    
+    - e.g., J♦ and Q♥ both worth 10 but **NOT** a match
+        
+    - negative cards still cancel properly (e.g., A=-2 then A+A → 0, not -4)
+        
 
-Then:
-- All other players get exactly one final turn.
-- During final-turn phase:
-  - Pass is disabled.
-  - After the final-turn phase completes, all remaining face-down cards automatically flip face-up (if any remain).
+### Proof from your console output
 
----
-
-# 7. Scoring
-
-## 7.1 Timing
-Scoring happens only at end of round after all cards are revealed.
-
-## 7.2 Card Values (Default)
-- A = 1
-- 2 = -2
-- 3–10 = face value
-- J = 10
-- Q = 10
-- K = 0
-
-Custom mappings allowed at table creation.
-
-## 7.3 Mode Support
-- Holes mode: play exactly 9 rounds (validator-enforced currently).
-- Points mode (target-based) is planned but not implemented in current backend milestones.
-
-## 7.4 Ties
-- Ties allowed
-- Multiple winners possible
-
----
-
-# 8. Draw Pile Exhaustion (Planned)
-If draw pile is empty:
-1. Remove top card from discard pile
-2. Shuffle remaining discard pile
-3. That becomes new draw pile
-4. Put removed card back as discard top
+- Final turn successfully triggered:
+    
+    - `final true ... triggerBy p_b8c1d821`
+        
+- Final turn resolved and advanced to next round:
+    
+    - `round 2 ... scores? true`
+        
+    - `lastRoundScores {p_b8c1d821: 23, p_55a5a646: 32}`
+        
+- New round requires initial reveals again:
+    
+    - `MUST_REVEAL You must reveal 2 more card(s) before drawing.`
+        
 
 ---
 
-# 9. Leave / Kick Mid-Game
-If a player leaves or is kicked:
-- Removed from turn order
-- Cards not revealed
-- Cannot rejoin
-- Game continues
+# Known quirks observed in the test output (not blockers)
 
-If only one player remains:
-- Game ends immediately
-- Stats are NOT recorded
-
----
-
-# 10. Chat
-- Lives only while at least one player connected
-- Stored in DO memory only
-- Destroyed when table empty
-- Owner may mute/unmute
+1. **Test script tried to REVEAL already-revealed positions for P2**, generating:
+    
+    - `ERROR BAD_STATE That card is already revealed.`  
+        This is fine; it was just the script being “dumb”. Gameplay behavior is correct.
+        
+2. **Rule validator constraint**:
+    
+    - `/api/table/create` returns 400 if `"holes"` mode and `maxRounds != 9`
+        
+    - Error observed: `holes mode requires maxRounds = 9`  
+        So all automated scripts must use `maxRounds: 9` unless we later relax that validator.
+        
 
 ---
 
-# 11. UI Requirements
+# Current expected code state (important files)
 
-## 11.1 Required Assets
-- Card sprite sheet (2 decks)
-- Table background texture
-- Hover glow effect
+These are the key Worker backend files (paths relative to `CardGolf/worker/src`):
 
-## 11.2 Help Card (Dynamic)
-Start of round (first turn only):
-> Reveal 2 cards in your grid to begin.
+1. `index.ts`
+    
+    - `/health`
+        
+    - `POST /api/table/create`
+        
+    - `POST /api/table/:id/start`
+        
+    - `/ws/table/:id` router forwarding to DO `/ws` with `table_id=<id>`
+        
+2. `table_do.ts`
+    
+    - deterministic max-player gating with **pending join reservation**
+        
+    - status refresh from D1 per connect
+        
+    - start blocks new players
+        
+    - implements gameplay:
+        
+        - initial reveals
+            
+        - draw/swap/discard/pass/reveal
+            
+        - final turn + scoring + next round
+            
+3. `protocol.ts`
+    
+    - WS message unions including:
+        
+        - `REVEAL`, `DRAW_SHOE`, `DRAW_DISCARD`, `SWAP`, `DISCARD_DRAWN`, `PASS`
+            
+        - `GAME_STATE` includes: round, final-turn info, scores
+            
+4. `validate_rules.ts`
+    
+    - enforces constraints like holes→maxRounds=9 (observed)
+        
 
-Start of turn:
-> Click the draw pile or discard pile to take a card, or reveal a card in your grid to end your turn immediately.
+Other:
 
-After drawing:
-> Click a card in your grid to swap, or click the discard pile to discard the drawn card (then reveal one face-down card).
-
-Last card:
-> You may reveal your last card to end the round, or click Pass (after drawing) to continue playing.
-
-Final turn:
-> Final turn: pass is disabled. Play your last turn normally.
-
-## 11.3 Confirmation Modal (Planned)
-When revealing final card:
-> “Revealing your last card ends the round for everyone. Do you wish to continue?”
+- `wrangler.jsonc`
+    
+- D1 migrations (`CardGolf/db/migrations/0001_init.sql`, `0002_tables.sql`, etc.)
+    
 
 ---
 
-# 12. Persistence (D1)
-(stats schema unchanged; implemented later)
+# What we need to do next (priority order)
+
+## A) Stabilize & polish gameplay engine
+
+1. Decide whether `lastRoundScores` should **persist** in GAME_STATE until next scoring, or be cleared at next round start (currently it persists into round 2).
+    
+2. Ensure the “final turn” rule is exactly what you want:
+    
+    - Right now it’s “everyone gets one more turn after trigger,” which matches your spec.
+        
+3. Confirm the “last card / pass” nuance:
+    
+    - We currently enforce: if fd==1, `DISCARD_DRAWN` without revealPos returns `USE_PASS` error (good).
+        
+    - Passing is blocked during final turn (good).
+        
+
+## B) Add UI/Client scaffolding (next big phase)
+
+- Build the front-end view from `GAME_STATE`:
+    
+    - show grid, face-up cards, discard pile top, draw count, current player turn
+        
+    - show “initial reveals remaining” prompt
+        
+    - show final-turn status banner
+        
+    - show last round scores + cumulative scores
+        
+
+## C) Persist match stats (future)
+
+- D1 tables for game history, wins/losses, etc.
+    
+- Store completed round scores + final match result.
+    
+
+---
+
+# What files to attach in the next conversation
+
+Attach these from your repo so the next thread can continue without guessing:
+
+1. `CardGolf/worker/src/index.ts`
+    
+2. `CardGolf/worker/src/table_do.ts`
+    
+3. `CardGolf/worker/src/protocol.ts`
+    
+4. `CardGolf/worker/src/validate_rules.ts`
+    
+5. `CardGolf/worker/wrangler.jsonc`
+    
+6. `CardGolf/db/migrations/0001_init.sql`
+    
+7. `CardGolf/db/migrations/0002_tables.sql`
+    
+8. Any additional migrations you have
+    
+
+Also include:
+
+- the console log snippet showing milestone 3 success (you already have it)
+    
+- optional: the test scripts you used (or just paste them again)
+    
+
+---
+
+# Copy/paste “handover prompt” for the next conversation
+
+Use this verbatim in the new chat:
+
+```text
+We are building CardGolf: a multiplayer Golf card game backend on Cloudflare Workers + Durable Objects + D1.
+
+We have working lobby + chat + table lifecycle. Core tests pass:
+- After /api/table/:id/start, new player joins are blocked (403).
+- Max players is 6; 7th join is blocked deterministically (race fixed with a pending-join reservation counter).
+
+Gameplay rules implemented (NO private peeks; cards face-down for everyone):
+- Grid positions: |1|3|5| / |2|4|6|
+- Start of each round: each player must REVEAL 2 cards on their first turn before drawing.
+- SWAP: drawn card becomes face-up in the chosen slot; replaced card goes to discard face-up.
+- DISCARD_DRAWN: if you discard a drawn card, you must reveal one face-down card (revealPos) unless you have exactly 1 face-down left, in which case you should PASS to avoid revealing the last card.
+- PASS requires you drew first and have exactly 1 face-down remaining; PASS is disabled during final turn.
+
+Milestone 3 implemented and tested:
+- Round ends when a player reveals their last face-down card.
+- Final turn phase begins: everyone gets one more turn; PASS disabled during final turn.
+- After final turns, auto-reveal remaining face-down cards, score round, update cumulative scores, deal next round.
+- Scoring: columns (1,2)(3,4)(5,6); match = same RANK (not point value); matched column = 0 even if rank values are negative.
+- We saw finalTurnActive true and then round advanced to 2 with lastRoundScores printed.
+
+Important validator constraint:
+- validate_rules enforces holes mode requires maxRounds=9, so /api/table/create returns 400 unless maxRounds is 9.
+
+Please review the repo files I attached:
+- CardGolf/worker/src/index.ts
+- CardGolf/worker/src/table_do.ts
+- CardGolf/worker/src/protocol.ts
+- CardGolf/worker/src/validate_rules.ts
+- CardGolf/worker/wrangler.jsonc
+- CardGolf/db/migrations/0001_init.sql
+- CardGolf/db/migrations/0002_tables.sql
+
+Next goals:
+1) sanity-check milestone 3 logic (final turn countdown, PASS blocking, score persistence between rounds)
+2) then start the UI (React + Pixi) driven entirely by GAME_STATE, including initial reveal prompts, turn controls, discard/draw, final turn banner, and score panels.
+```
+
+That’s everything you need to paste into the new thread so we pick up instantly.

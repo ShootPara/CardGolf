@@ -54,4 +54,7 @@
     "allowSpectators": true,
     "allowSpectatorChat": true
   }
+
+  // Implementation note (not a rules flag):
+  // Backend seeds discardTop with 1 face-up card at start of game and each new round.
 }
