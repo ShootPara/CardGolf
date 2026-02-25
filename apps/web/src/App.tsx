@@ -8,6 +8,9 @@ import { ChatPanel } from "./ui/ChatPanel";
 import { TurnControls } from "./ui/TurnControls";
 import type { Intent } from "./ui/TurnControls";
 import { YouGrid } from "./ui/YouGrid";
+import { PilesPanel } from "./ui/PilesPanel";
+import { GameStatusBar } from "./ui/GameStatusBar";
+import { PlayersPanel } from "./ui/PlayersPanel";
 
 /* ---------------------------------------------
  * Section: Small helpers
@@ -21,6 +24,16 @@ function pretty(obj: any) {
   }
 }
 
+
+
+function buildJoinUrl(baseUrl: string, opts: { devEmail: string; tableId: string; role: string }) {
+  const u = new URL(baseUrl);
+  u.searchParams.set("dev_email", opts.devEmail);
+  u.searchParams.set("tableId", opts.tableId);
+  u.searchParams.set("role", opts.role);
+  u.searchParams.set("autoconnect", "1");
+  return u.toString();
+}
 /* ---------------------------------------------
  * Section: App
  * --------------------------------------------- */
@@ -42,9 +55,14 @@ export default function App() {
   // The grid click meaning depends on this intent.
   const [intent, setIntent] = useState<TurnIntent>(null);
 
-  // ---- WS + latest server states ----
+  
+  const [autoConnectRequested, setAutoConnectRequested] = useState(false);
+// ---- WS + latest server states ----
   const wsRef = useRef<CgWs | null>(null);
   const [wsStatus, setWsStatus] = useState<string>("disconnected");
+
+  const [myPlayerId, setMyPlayerId] = useState<string | null>(null);
+  const [lastWsClose, setLastWsClose] = useState<{ code: number; reason: string } | null>(null);
 
   const [tableState, setTableState] = useState<any>(null);
   const [chatState, setChatState] = useState<any>(null);
@@ -84,6 +102,7 @@ export default function App() {
         break;
 
       case "WELCOME":
+        setMyPlayerId(msg?.payload?.you?.playerId ?? null);
         break;
 
       case "ERROR":
@@ -106,13 +125,18 @@ export default function App() {
 
     const ws = new CgWs(session, {
       onOpen: () => setWsStatus("connected"),
-      onClose: (ev) => setWsStatus(`closed (${ev.code})`),
+      onClose: (ev) => {
+        setWsStatus(`closed (${ev.code})`);
+        setLastWsClose({ code: ev.code, reason: ev.reason ?? "" });
+      },
       onError: () => setWsStatus("error"),
       onMessage: handleWsMessage,
     });
 
     wsRef.current = ws;
     setWsStatus("connecting...");
+    setLastWsClose(null);
+    setMyPlayerId(null);
     setLastError(null);
     setTableState(null);
     setChatState(null);
@@ -135,7 +159,38 @@ export default function App() {
     return () => wsRef.current?.close();
   }, []);
 
-  /* ---------------------------------------------
+  
+
+  // Auto-fill from URL params: ?dev_email=...&tableId=...&role=player|spectator&autoconnect=1
+  useEffect(() => {
+    const qs = new URLSearchParams(window.location.search);
+
+    const qEmail = qs.get("dev_email");
+    const qTableId = qs.get("tableId");
+    const qRole = qs.get("role");
+    const qAuto = qs.get("autoconnect");
+
+    if (qEmail) setDevEmail(qEmail);
+    if (qTableId) setTableIdInput(qTableId);
+    if (qRole === "player" || qRole === "spectator") setRole(qRole);
+
+    if (qAuto === "1" || qAuto?.toLowerCase() === "true") {
+      setAutoConnectRequested(true);
+    }
+    // run once
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // If URL requested autoconnect, connect once when devEmail + tableId are available.
+  useEffect(() => {
+    if (!autoConnectRequested) return;
+    if (!devEmail || !tableIdInput) return;
+
+    setAutoConnectRequested(false);
+    connectWs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoConnectRequested, devEmail, tableIdInput]);
+/* ---------------------------------------------
    * Section: API actions
    * --------------------------------------------- */
 
@@ -239,6 +294,39 @@ export default function App() {
           <input value={tableIdInput} onChange={(e) => setTableIdInput(e.target.value)} style={{ width: 220 }} />
         </label>
 
+        {tableIdInput ? (
+          <>
+            <button
+              onClick={async () => {
+                const url = buildJoinUrl(window.location.href, {
+                  devEmail: "p2@example.com",
+                  tableId: tableIdInput,
+                  role: "player",
+                });
+                await navigator.clipboard.writeText(url);
+                alert("Copied P2 join link");
+              }}
+            >
+              Copy P2 Join Link
+            </button>
+
+            <button
+              onClick={async () => {
+                const url = buildJoinUrl(window.location.href, {
+                  devEmail: "spectator@example.com",
+                  tableId: tableIdInput,
+                  role: "spectator",
+                });
+                await navigator.clipboard.writeText(url);
+                alert("Copied spectator link");
+              }}
+            >
+              Copy Spectator Link
+            </button>
+          </>
+        ) : null}
+
+
         <span style={{ opacity: 0.8 }}>ws: {wsStatus}</span>
 
         {phase !== "HOME" ? <button onClick={disconnectWs}>Disconnect</button> : null}
@@ -252,7 +340,20 @@ export default function App() {
         </pre>
       ) : null}
 
-      {/* HOME */}
+      
+      {lastWsClose && phase !== "HOME" ? (
+        <div style={{ background: "#222", padding: 10, borderRadius: 8, marginTop: 12, opacity: 0.9 }}>
+          WS closed: <strong>{lastWsClose.code}</strong>
+          {lastWsClose.reason ? <span> — {lastWsClose.reason}</span> : null}
+          {tableState?.status === "started" ? (
+            <div style={{ marginTop: 6, opacity: 0.85 }}>
+              If you opened this link after the host started the game, player joins are blocked (by design). Ask the host to create a new table.
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+{/* HOME */}
       {phase === "HOME" ? (
         <div style={{ marginTop: 16, display: "grid", gap: 12 }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -285,7 +386,30 @@ export default function App() {
               <>
                 <h3>Lobby</h3>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button onClick={startTable}>Start Game</button>
+                  <button
+                    onClick={startTable}
+                    disabled={
+                      wsStatus !== "connected" ||
+                      !tableState ||
+                      tableState.status !== "open" ||
+                      !myPlayerId ||
+                      tableState.ownerPlayerId !== myPlayerId ||
+                      !(Array.isArray(tableState.players) && tableState.players.length >= 2)
+                    }
+                    title={
+                      !tableState
+                        ? "Waiting for TABLE_STATE"
+                        : !myPlayerId
+                          ? "Waiting for WELCOME"
+                          : tableState.ownerPlayerId !== myPlayerId
+                            ? "Only the owner can start"
+                            : !(Array.isArray(tableState.players) && tableState.players.length >= 2)
+                              ? "Need at least 2 players"
+                              : ""
+                    }
+                  >
+                    Start Game
+                  </button>
                   <button onClick={() => wsSend("PING")}>Ping</button>
                 </div>
 
@@ -303,7 +427,20 @@ export default function App() {
                 {/* Step 4: Clickable grid + intent-driven actions */}
                 {gameState ? (
                   <>
-                    <YouGrid
+
+                    <GameStatusBar tableState={tableState} gameState={gameState} />
+
+    <div style={{ marginTop: 12 }}>
+      <PilesPanel
+                      gameState={gameState}
+                      intent={intent}
+                      onDrawShoe={() => wsSend("DRAW_SHOE")}
+                      onDrawDiscard={() => wsSend("DRAW_DISCARD")}
+                    />
+
+                    
+    </div>
+<YouGrid
                       gameState={gameState}
                       intent={intent}
                       onPickPos={(pos) => {
@@ -342,10 +479,12 @@ export default function App() {
                 ) : null}
 
                 {/* Keep this while we build; it's a great debug view */}
-                <h4 style={{ marginTop: 12 }}>GAME_STATE</h4>
-                <pre style={{ background: "#111", padding: 12, borderRadius: 8, overflowX: "auto" }}>
-                  {gameState ? pretty(gameState) : "(waiting for GAME_STATE...)"}
-                </pre>
+                <details style={{ marginTop: 12 }}>
+                  <summary style={{ cursor: "pointer", opacity: 0.85 }}>GAME_STATE (debug)</summary>
+                  <pre style={{ background: "#111", padding: 12, borderRadius: 8, overflowX: "auto", marginTop: 8 }}>
+                    {gameState ? pretty(gameState) : "(waiting for GAME_STATE...)"}
+                  </pre>
+                </details>
               </>
             ) : null}
           </div>
