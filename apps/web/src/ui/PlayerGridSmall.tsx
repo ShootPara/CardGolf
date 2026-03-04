@@ -1,22 +1,41 @@
-// FILE: /apps/web/src/ui/PlayerGridSmall.tsx (NEW)
+// FILE: /apps/web/src/ui/PlayerGridSmall.tsx (REPLACE)
 //
-// Small 2x3 grid renderer used for other players (and optionally you).
-// No private peeks: relies on server to omit face-down card faces.
+// Change:
+// - Suit letters -> symbols
+// - Red suits (♥ ♦) colored
 
 import type { GridPos } from "../lib/cgTypes";
 
 const TOP_ROW: GridPos[] = [1, 3, 5];
 const BOT_ROW: GridPos[] = [2, 4, 6];
 
-function cardLabel(card: any): string {
-  if (!card) return "";
+function suitSymbol(s: any): string {
+  const v = String(s ?? "");
+  if (v === "C") return "♣";
+  if (v === "D") return "♦";
+  if (v === "H") return "♥";
+  if (v === "S") return "♠";
+  return v;
+}
+
+function suitColor(symbol: string): string {
+  return symbol === "♥" || symbol === "♦" ? "#ff4d4d" : "white";
+}
+
+function renderCard(card: any) {
+  if (!card) return null;
   const r = card.rank ?? card.r ?? card.value ?? "";
-  const s = card.suit ?? card.s ?? "";
-  return `${r}${s}`;
+  const sym = suitSymbol(card.suit ?? card.s ?? "");
+  return (
+    <span style={{ fontWeight: 900, fontSize: 13 }}>
+      <span>{String(r)}</span>
+      <span style={{ color: suitColor(sym) }}>{sym}</span>
+    </span>
+  );
 }
 
 type PlayerGridSmallProps = {
-  grid: any[] | null | undefined; // array of {pos, visible/revealed, card?}
+  grid: any[] | null | undefined;
 };
 
 export function PlayerGridSmall({ grid }: PlayerGridSmallProps) {
@@ -26,25 +45,18 @@ export function PlayerGridSmall({ grid }: PlayerGridSmallProps) {
     return gridArr.find((c) => c?.pos === pos) ?? null;
   }
 
-  function tileText(pos: GridPos) {
+  function tileBody(pos: GridPos) {
     const cell = getCell(pos);
     const visible = !!(cell?.visible ?? cell?.revealed);
-    if (!visible) return "🂠";
-    const label = cardLabel(cell?.card);
-    return label ? label : "🂡";
+    if (!visible) return <span>🂠</span>;
+    const node = renderCard(cell?.card);
+    return node ? node : <span>🂡</span>;
   }
 
   return (
     <div style={{ display: "grid", gap: 6 }}>
       {[TOP_ROW, BOT_ROW].map((row, idx) => (
-        <div
-          key={idx}
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: 6,
-          }}
-        >
+        <div key={idx} style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
           {row.map((pos) => (
             <div
               key={pos}
@@ -61,7 +73,7 @@ export function PlayerGridSmall({ grid }: PlayerGridSmallProps) {
               }}
               title={`pos ${pos}`}
             >
-              {tileText(pos)}
+              {tileBody(pos)}
             </div>
           ))}
         </div>

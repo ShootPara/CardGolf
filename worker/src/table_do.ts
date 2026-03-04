@@ -281,6 +281,12 @@ export class TableDO {
       case "PING": return this.send(ws, { type: "PONG" });
       case "CHAT_SEND": return this.handleChat(ws, who, msg.payload?.text);
 
+// owner controls
+case "OWNER_DELEGATE": return this.handleOwnerDelegate(ws, who, (msg as any).payload?.toPlayerId);
+case "MUTE": return this.handleMute(ws, who, (msg as any).payload?.targetId, (msg as any).payload?.targetRole);
+case "UNMUTE": return this.handleUnmute(ws, who, (msg as any).payload?.targetId, (msg as any).payload?.targetRole);
+case "KICK": return this.handleKick(ws, who, (msg as any).payload?.targetId, (msg as any).payload?.targetRole);
+
       // gameplay
       case "DRAW_SHOE": return this.handleDraw(ws, who, "shoe");
       case "DRAW_DISCARD": return this.handleDraw(ws, who, "discard");
@@ -329,6 +335,81 @@ export class TableDO {
       await this.env.cardgolf.prepare(`DELETE FROM tables WHERE table_id = ?`).bind(tableId).run();
     }
   }
+
+
+/* =========================
+ * Owner controls
+ * ========================= */
+
+private requireOwner(who: { id: string; role: Role }, ws: WebSocket): boolean {
+  if (who.role !== "player") {
+    this.err(ws, "FORBIDDEN", "Only a player can be the table owner.");
+    return false;
+  }
+  const ownerId = this.table.ownerPlayerId ?? this.table.config?.creatorPlayerId ?? null;
+  if (!ownerId || who.id !== ownerId) {
+    this.err(ws, "FORBIDDEN", "Only the table owner can perform this action.");
+    return false;
+  }
+  return true;
+}
+
+private handleOwnerDelegate(ws: WebSocket, who: { id: string; role: Role }, toPlayerId?: string) {
+  if (!this.requireOwner(who, ws)) return;
+  if (!toPlayerId) return this.err(ws, "BAD_REQUEST", "toPlayerId required.");
+
+  const exists = this.table.players.some((p) => p.playerId === toPlayerId);
+  if (!exists) return this.err(ws, "NOT_FOUND", "Target player not found/connected.");
+
+  this.table.ownerPlayerId = toPlayerId;
+  this.broadcastState();
+}
+
+private handleMute(ws: WebSocket, who: { id: string; role: Role }, targetId?: string, targetRole?: Role) {
+  if (!this.requireOwner(who, ws)) return;
+  if (!targetId || !targetRole) return this.err(ws, "BAD_REQUEST", "targetId + targetRole required.");
+
+  if (targetRole === "player") this.table.mutedPlayers.add(targetId);
+  else this.table.mutedSpectators.add(targetId);
+
+  this.broadcastState();
+}
+
+private handleUnmute(ws: WebSocket, who: { id: string; role: Role }, targetId?: string, targetRole?: Role) {
+  if (!this.requireOwner(who, ws)) return;
+  if (!targetId || !targetRole) return this.err(ws, "BAD_REQUEST", "targetId + targetRole required.");
+
+  if (targetRole === "player") this.table.mutedPlayers.delete(targetId);
+  else this.table.mutedSpectators.delete(targetId);
+
+  this.broadcastState();
+}
+
+private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: string, targetRole?: Role) {
+  if (!this.requireOwner(who, ws)) return;
+  if (!targetId || !targetRole) return this.err(ws, "BAD_REQUEST", "targetId + targetRole required.");
+
+  if (targetRole === "player") {
+    const target = this.table.players.find((p) => p.playerId === targetId);
+    if (!target) return this.err(ws, "NOT_FOUND", "Player not found.");
+
+    try { target.ws.close(4001, "Kicked by owner"); } catch {}
+    this.table.players = this.table.players.filter((p) => p.playerId !== targetId);
+
+    // If owner kicked themself (rare), reassign to first remaining player
+    if (this.table.ownerPlayerId === targetId) {
+      this.table.ownerPlayerId = this.table.players.length > 0 ? this.table.players[0].playerId : null;
+    }
+  } else {
+    const target = this.table.spectators.find((s) => s.spectatorId === targetId);
+    if (!target) return this.err(ws, "NOT_FOUND", "Spectator not found.");
+
+    try { target.ws.close(4001, "Kicked by owner"); } catch {}
+    this.table.spectators = this.table.spectators.filter((s) => s.spectatorId !== targetId);
+  }
+
+  this.broadcastState();
+}
 
   // =========================
   // Gameplay rules

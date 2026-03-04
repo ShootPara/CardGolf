@@ -1,9 +1,8 @@
 // FILE: /apps/web/src/ui/YouGrid.tsx (REPLACE)
 //
-// Step 6.2:
-// - When intent is DISCARD_REVEALPOS, only allow clicking FACE-DOWN cards (valid revealPos).
-// - When intent is null and you have pendingDraw (and not in initial gate), grid clicks are disabled (already supported).
-// - When intent is REVEAL (null & no pending draw), only allow clicking FACE-DOWN cards (avoid server "already revealed" errors).
+// Change:
+// - Suit letters -> symbols
+// - Red suits (♥ ♦) colored
 
 import type { GridPos } from "../lib/cgTypes";
 import type { Intent } from "./TurnControls";
@@ -17,11 +16,30 @@ type YouGridProps = {
 const TOP_ROW: GridPos[] = [1, 3, 5];
 const BOT_ROW: GridPos[] = [2, 4, 6];
 
-function cardLabel(card: any): string {
-  if (!card) return "";
+function suitSymbol(s: any): string {
+  const v = String(s ?? "");
+  if (v === "C") return "♣";
+  if (v === "D") return "♦";
+  if (v === "H") return "♥";
+  if (v === "S") return "♠";
+  return v;
+}
+
+function suitColor(symbol: string): string {
+  // red for hearts/diamonds, neutral for others
+  return symbol === "♥" || symbol === "♦" ? "#ff4d4d" : "white";
+}
+
+function renderCard(card: any) {
+  if (!card) return null;
   const r = card.rank ?? card.r ?? card.value ?? "";
-  const s = card.suit ?? card.s ?? "";
-  return `${r}${s}`;
+  const sym = suitSymbol(card.suit ?? card.s ?? "");
+  return (
+    <span style={{ fontWeight: 900 }}>
+      <span>{String(r)}</span>
+      <span style={{ color: suitColor(sym) }}>{sym}</span>
+    </span>
+  );
 }
 
 export function YouGrid({ gameState, intent, onPickPos }: YouGridProps) {
@@ -29,27 +47,16 @@ export function YouGrid({ gameState, intent, onPickPos }: YouGridProps) {
   const gridArr: any[] = Array.isArray(you?.grid) ? you.grid : [];
 
   const isYourTurn =
-    you?.playerId && gameState?.currentTurnPlayerId
-      ? you.playerId === gameState.currentTurnPlayerId
-      : false;
+    you?.playerId && gameState?.currentTurnPlayerId ? you.playerId === gameState.currentTurnPlayerId : false;
 
   const initialRemaining = you?.initialRevealsRemaining ?? 0;
   const pendingDraw = gameState?.pendingDraw ?? null;
 
   const inPlaying = gameState?.phase === "playing";
-
-  // When you have a pending draw, grid is locked until you choose Swap or Discard.
   const needsChoiceFirst = initialRemaining === 0 && pendingDraw != null && intent == null;
 
-  // Clicks are allowed when:
-  // - initial reveal gate is active (click to reveal)
-  // - OR no pending draw (click to reveal)
-  // - OR an explicit intent is chosen (swap / discard revealPos)
   const clickModeAllowed =
-    initialRemaining > 0 ||
-    pendingDraw == null ||
-    intent === "SWAP" ||
-    intent === "DISCARD_REVEALPOS";
+    initialRemaining > 0 || pendingDraw == null || intent === "SWAP" || intent === "DISCARD_REVEALPOS";
 
   const canClickGrid = isYourTurn && inPlaying && clickModeAllowed;
 
@@ -63,20 +70,16 @@ export function YouGrid({ gameState, intent, onPickPos }: YouGridProps) {
     return !visible;
   }
 
-  function tileText(pos: GridPos) {
+  function tileBody(pos: GridPos) {
     const cell = getCell(pos);
     const visible = !!(cell?.visible ?? cell?.revealed);
-    if (!visible) return "🂠";
-    const label = cardLabel(cell?.card);
-    return label ? label : "🂡";
+    if (!visible) return <span>🂠</span>;
+    const node = renderCard(cell?.card);
+    return node ? node : <span>🂡</span>;
   }
 
   const banner =
-    intent === "SWAP"
-      ? "SWAP MODE"
-      : intent === "DISCARD_REVEALPOS"
-        ? "DISCARD → PICK REVEAL"
-        : "REVEAL MODE";
+    intent === "SWAP" ? "SWAP MODE" : intent === "DISCARD_REVEALPOS" ? "DISCARD → PICK REVEAL" : "REVEAL MODE";
 
   function helperText() {
     if (!isYourTurn) return "Waiting for your turn…";
@@ -93,19 +96,10 @@ export function YouGrid({ gameState, intent, onPickPos }: YouGridProps) {
     return "Click a FACE-DOWN card to REVEAL (ends your turn)";
   }
 
-  // Determine per-tile click permission:
-  // - SWAP: any position
-  // - DISCARD_REVEALPOS: face-down only
-  // - default reveal: face-down only
   function canPickPos(pos: GridPos): boolean {
     if (!canClickGrid) return false;
-
     if (intent === "SWAP") return true;
-
-    // RevealPos must be face-down
     if (intent === "DISCARD_REVEALPOS") return isFaceDown(pos);
-
-    // Default REVEAL mode: only face-down (avoid "already revealed")
     return isFaceDown(pos);
   }
 
@@ -143,8 +137,6 @@ export function YouGrid({ gameState, intent, onPickPos }: YouGridProps) {
             {row.map((pos) => {
               const cell = getCell(pos);
               const visible = !!(cell?.visible ?? cell?.revealed);
-              const label = tileText(pos);
-
               const canPick = canPickPos(pos);
 
               return (
@@ -166,7 +158,7 @@ export function YouGrid({ gameState, intent, onPickPos }: YouGridProps) {
                   title={`pos ${pos}`}
                 >
                   <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>pos {pos}</div>
-                  <div style={{ fontWeight: 700 }}>{label}</div>
+                  <div style={{ fontWeight: 700 }}>{tileBody(pos)}</div>
                 </button>
               );
             })}

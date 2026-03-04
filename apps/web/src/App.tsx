@@ -1,3 +1,18 @@
+/**
+ * FILE: /apps/web/src/App.tsx (REPLACE)
+ *
+ * Restores:
+ * - Table Setup panel on HOME (rules_json builder)
+ *
+ * Adds:
+ * - Graceful UI notice for common/expected errors (e.g., MUTED) near Chat
+ * - OwnerControlsPanel available during GAME (owner-only)
+ *
+ * Keeps:
+ * - CardValuesPanel under chat (compact)
+ * - No Ping button (removed)
+ */
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
@@ -10,7 +25,17 @@ import type { Intent } from "./ui/TurnControls";
 import { YouGrid } from "./ui/YouGrid";
 import { PilesPanel } from "./ui/PilesPanel";
 import { GameStatusBar } from "./ui/GameStatusBar";
-import { PlayersPanel } from "./ui/PlayersPanel";
+
+import { TableSetupPanel, buildRulesJsonFromSetup, defaultTableSetupState, type TableSetupState } from "./ui/TableSetupPanel";
+import { CardValuesPanel } from "./ui/CardValuesPanel";
+import { OwnerControlsPanel } from "./ui/OwnerControlsPanel";
+
+import { TableViewPanel } from "./ui/TableViewPanel";
+/* ---------------------------------------------
+ * Section: Types
+ * --------------------------------------------- */
+
+type TurnIntent = Intent;
 
 /* ---------------------------------------------
  * Section: Small helpers
@@ -24,8 +49,6 @@ function pretty(obj: any) {
   }
 }
 
-
-
 function buildJoinUrl(baseUrl: string, opts: { devEmail: string; tableId: string; role: string }) {
   const u = new URL(baseUrl);
   u.searchParams.set("dev_email", opts.devEmail);
@@ -34,6 +57,7 @@ function buildJoinUrl(baseUrl: string, opts: { devEmail: string; tableId: string
   u.searchParams.set("autoconnect", "1");
   return u.toString();
 }
+
 /* ---------------------------------------------
  * Section: App
  * --------------------------------------------- */
@@ -50,14 +74,15 @@ export default function App() {
     return { devEmail, tableId: tableIdInput || undefined, role };
   }, [devEmail, tableIdInput, role]);
 
-  // ---- UI intent (Step 4) ----
-  // When you have a pending draw, the user MUST choose Swap or Discard first.
-  // The grid click meaning depends on this intent.
+  // ---- Table setup ----
+  const [tableSetup, setTableSetup] = useState<TableSetupState>(() => defaultTableSetupState());
+
+  // ---- UI intent ----
   const [intent, setIntent] = useState<TurnIntent>(null);
 
-  
   const [autoConnectRequested, setAutoConnectRequested] = useState(false);
-// ---- WS + latest server states ----
+
+  // ---- WS + latest server states ----
   const wsRef = useRef<CgWs | null>(null);
   const [wsStatus, setWsStatus] = useState<string>("disconnected");
 
@@ -68,6 +93,16 @@ export default function App() {
   const [chatState, setChatState] = useState<any>(null);
   const [gameState, setGameState] = useState<any>(null);
   const [lastError, setLastError] = useState<any>(null);
+
+  // --- UI notices (small, auto-dismissing) ---
+  const [uiNotice, setUiNotice] = useState<{ kind: "info" | "warn"; text: string } | null>(null);
+  const noticeTimerRef = useRef<number | null>(null);
+
+  function showNotice(kind: "info" | "warn", text: string) {
+    setUiNotice({ kind, text });
+    if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = window.setTimeout(() => setUiNotice(null), 3500);
+  }
 
   /* ---------------------------------------------
    * Section: WS lifecycle
@@ -102,12 +137,23 @@ export default function App() {
         break;
 
       case "WELCOME":
-        setMyPlayerId(msg?.payload?.you?.playerId ?? null);
+        setMyPlayerId((msg as any)?.payload?.you?.playerId ?? null);
         break;
 
-      case "ERROR":
-        setLastError(msg.payload ?? (msg as any).error ?? msg);
-        break;
+      case "ERROR": {
+        const p: any = (msg as any).payload ?? (msg as any).error ?? msg;
+        const code = p?.code ?? "";
+        const message = p?.message ?? "Error";
+
+        // Graceful UX for common/expected errors
+        if (code === "MUTED") {
+          showNotice("warn", "You’re muted by the table owner.");
+          return;
+        }
+
+        setLastError(p ?? { code, message });
+        return;
+      }
 
       default:
         break;
@@ -156,10 +202,11 @@ export default function App() {
   }
 
   useEffect(() => {
-    return () => wsRef.current?.close();
+    return () => {
+      wsRef.current?.close();
+      if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    };
   }, []);
-
-  
 
   // Auto-fill from URL params: ?dev_email=...&tableId=...&role=player|spectator&autoconnect=1
   useEffect(() => {
@@ -190,7 +237,8 @@ export default function App() {
     connectWs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoConnectRequested, devEmail, tableIdInput]);
-/* ---------------------------------------------
+
+  /* ---------------------------------------------
    * Section: API actions
    * --------------------------------------------- */
 
@@ -199,32 +247,13 @@ export default function App() {
     try {
       setLastError(null);
 
-      // Minimal default rules used by our test harness.
-      // NOTE: holes mode requires maxRounds=9 (validate_rules constraint).
-      const rules_json = {
-        schemaVersion: 1,
-        rulesetName: "UI Default",
-        gameVariant: { variantId: "golf-6card", grid: { rows: 2, cols: 3 }, initialPeekCount: 2, deckCount: 2 },
-        endConditions: {
-          mode: "holes",
-          maxRounds: 9,
-          pointsTarget: null,
-          roundEnd: {
-            trigger: "player_reveals_last_card",
-            finalTurnPolicy: "everyone_gets_one_more_turn",
-            autoRevealRemainingFaceDown: true,
-            passAllowedDuringFinalTurn: false,
-          },
-        },
-        scoring: {
-          rankValues: { A: 1, 2: -2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9, 10: 10, J: 10, Q: 10, K: 0 },
-          columnMatchCancels: true,
-        },
-        passRule: { enabled: true, requiresDrawFirst: true, requiresExactlyOneFaceDown: true, disabledDuringFinalTurn: true },
-        uiOptions: { allowSpectators: true, allowSpectatorChat: true },
-      };
+      const built = buildRulesJsonFromSetup(tableSetup);
+      if (!built.ok) {
+        alert("Fix Table Setup first:\n\n" + built.error);
+        return;
+      }
 
-      const res = await apiPost<any>("/api/table/create", devEmail, { rules_json });
+      const res = await apiPost<any>("/api/table/create", devEmail, { rules_json: built.rules });
 
       const newId = res?.table?.tableId ?? res?.tableId ?? res?.id;
       if (!newId) {
@@ -326,7 +355,6 @@ export default function App() {
           </>
         ) : null}
 
-
         <span style={{ opacity: 0.8 }}>ws: {wsStatus}</span>
 
         {phase !== "HOME" ? <button onClick={disconnectWs}>Disconnect</button> : null}
@@ -340,22 +368,24 @@ export default function App() {
         </pre>
       ) : null}
 
-      
       {lastWsClose && phase !== "HOME" ? (
         <div style={{ background: "#222", padding: 10, borderRadius: 8, marginTop: 12, opacity: 0.9 }}>
           WS closed: <strong>{lastWsClose.code}</strong>
           {lastWsClose.reason ? <span> — {lastWsClose.reason}</span> : null}
           {tableState?.status === "started" ? (
             <div style={{ marginTop: 6, opacity: 0.85 }}>
-              If you opened this link after the host started the game, player joins are blocked (by design). Ask the host to create a new table.
+              If you opened this link after the host started the game, player joins are blocked (by design). Ask the host
+              to create a new table.
             </div>
           ) : null}
         </div>
       ) : null}
 
-{/* HOME */}
+      {/* HOME */}
       {phase === "HOME" ? (
         <div style={{ marginTop: 16, display: "grid", gap: 12 }}>
+          <TableSetupPanel value={tableSetup} onChange={setTableSetup} />
+
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={createTable}>Create Table</button>
             <button onClick={connectWs} disabled={!tableIdInput}>
@@ -363,9 +393,7 @@ export default function App() {
             </button>
           </div>
 
-          <p style={{ opacity: 0.8, margin: 0 }}>
-            Create/connect, then Lobby → Start → Game. Chat will appear after you connect.
-          </p>
+          <p style={{ opacity: 0.8, margin: 0 }}>Create/connect, then Lobby → Start → Game. Chat will appear after you connect.</p>
         </div>
       ) : null}
 
@@ -385,6 +413,7 @@ export default function App() {
             {phase === "LOBBY" ? (
               <>
                 <h3>Lobby</h3>
+
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button
                     onClick={startTable}
@@ -410,7 +439,11 @@ export default function App() {
                   >
                     Start Game
                   </button>
-                  <button onClick={() => wsSend("PING")}>Ping</button>
+                </div>
+
+                {/* Owner controls (Lobby) */}
+                <div style={{ marginTop: 12 }}>
+                  <OwnerControlsPanel tableState={tableState} myPlayerId={myPlayerId} wsStatus={wsStatus} wsSend={wsSend} />
                 </div>
 
                 <h4 style={{ marginTop: 12 }}>TABLE_STATE</h4>
@@ -424,23 +457,20 @@ export default function App() {
               <>
                 <h3>Game</h3>
 
-                {/* Step 4: Clickable grid + intent-driven actions */}
                 {gameState ? (
                   <>
-
                     <GameStatusBar tableState={tableState} gameState={gameState} />
 
-    <div style={{ marginTop: 12 }}>
-      <PilesPanel
-                      gameState={gameState}
-                      intent={intent}
-                      onDrawShoe={() => wsSend("DRAW_SHOE")}
-                      onDrawDiscard={() => wsSend("DRAW_DISCARD")}
-                    />
+                    <div style={{ marginTop: 12 }}>
+                      <PilesPanel
+                        gameState={gameState}
+                        intent={intent}
+                        onDrawShoe={() => wsSend("DRAW_SHOE")}
+                        onDrawDiscard={() => wsSend("DRAW_DISCARD")}
+                      />
+                    </div>
 
-                    
-    </div>
-<YouGrid
+                    <YouGrid
                       gameState={gameState}
                       intent={intent}
                       onPickPos={(pos) => {
@@ -456,8 +486,6 @@ export default function App() {
                           return;
                         }
 
-                        // IMPORTANT: if the player has a pending drawn card, they must choose Swap or Discard first.
-                        // No "free clicking" to reveal while holding a draw.
                         const you = gameState?.you;
                         const initialRemaining = you?.initialRevealsRemaining ?? 0;
                         const pendingDraw = gameState?.pendingDraw ?? null;
@@ -475,10 +503,14 @@ export default function App() {
                         onSend={(type, payload) => wsSend(type, payload)}
                       />
                     </div>
+
+<div style={{ marginTop: 12 }}>
+  <TableViewPanel tableState={tableState} gameState={gameState} />
+</div>
                   </>
                 ) : null}
 
-                {/* Keep this while we build; it's a great debug view */}
+                {/* Debug */}
                 <details style={{ marginTop: 12 }}>
                   <summary style={{ cursor: "pointer", opacity: 0.85 }}>GAME_STATE (debug)</summary>
                   <pre style={{ background: "#111", padding: 12, borderRadius: 8, overflowX: "auto", marginTop: 8 }}>
@@ -489,9 +521,33 @@ export default function App() {
             ) : null}
           </div>
 
-          {/* RIGHT: chat */}
+          {/* RIGHT: chat + compact card values + owner controls during game */}
           {showRightChat ? (
-            <ChatPanel chatState={chatState} disabled={wsStatus !== "connected"} onSend={sendChat} title="Chat" />
+            <div style={{ display: "grid", gap: 12 }}>
+              <ChatPanel chatState={chatState} disabled={wsStatus !== "connected"} onSend={sendChat} title="Chat" />
+
+              {uiNotice ? (
+                <div
+                  style={{
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                    background: uiNotice.kind === "warn" ? "#2a1a1a" : "#1a1f2a",
+                    border: "1px solid rgba(255,255,255,0.10)",
+                    opacity: 0.95,
+                    fontWeight: 700,
+                  }}
+                >
+                  {uiNotice.text}
+                </div>
+              ) : null}
+
+              {/* Under chat: reference panels */}
+              {phase === "GAME" ? <CardValuesPanel gameState={gameState} /> : null}
+
+              {phase === "GAME" ? (
+                <OwnerControlsPanel tableState={tableState} myPlayerId={myPlayerId} wsStatus={wsStatus} wsSend={wsSend} />
+              ) : null}
+            </div>
           ) : null}
         </div>
       ) : null}

@@ -1,6 +1,10 @@
-// FILE: /apps/web/src/ui/GameStatusBar.tsx (NEW)
+// FILE: /apps/web/src/ui/GameStatusBar.tsx (REPLACE)
 //
-// Compact status bar: round, turn owner, final-turn banner.
+// Changes:
+// - Show mode:
+//   - holes: "Round X / 9"
+//   - points: "Points game • target: N"
+// - When matchOver: show winners (by email) + reason
 
 type GameStatusBarProps = {
   tableState: any;
@@ -8,8 +12,13 @@ type GameStatusBarProps = {
 };
 
 export function GameStatusBar({ tableState, gameState }: GameStatusBarProps) {
+  const rules = gameState?.rulesSummary ?? {};
+  const mode = rules?.mode === "points" ? "points" : "holes";
+  const pointsTarget = typeof rules?.pointsTarget === "number" ? rules.pointsTarget : null;
+
   const round = gameState?.round ?? "?";
   const maxRounds = gameState?.maxRounds ?? "?";
+
   const finalTurnActive = !!gameState?.finalTurnActive;
   const finalTurnsRemainingCount = gameState?.finalTurnsRemainingCount ?? 0;
 
@@ -18,6 +27,21 @@ export function GameStatusBar({ tableState, gameState }: GameStatusBarProps) {
   const players: any[] = Array.isArray(tableState?.players) ? tableState.players : [];
   const cur = players.find((p) => p?.playerId === curPid) ?? null;
   const curLabel = cur?.email ?? curPid ?? "—";
+
+  const matchOver = !!gameState?.matchOver || gameState?.status === "ended";
+  const winners: string[] | null = Array.isArray(gameState?.winners) ? gameState.winners : null;
+  const endedReason = gameState?.endedReason ?? null;
+
+  const winnerEmails =
+    winners && winners.length
+      ? winners.map((pid) => (players.find((p) => p?.playerId === pid)?.email ?? pid)).join(", ")
+      : null;
+
+  function reasonLabel() {
+    if (endedReason === "points_target_reached") return "Points target reached";
+    if (endedReason === "holes_max_rounds_reached") return "Final round complete";
+    return "Match complete";
+  }
 
   return (
     <div
@@ -34,19 +58,43 @@ export function GameStatusBar({ tableState, gameState }: GameStatusBarProps) {
       }}
     >
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "baseline" }}>
-        <div>
-          <span style={{ opacity: 0.8 }}>Round</span>{" "}
-          <strong>{round}</strong>
-          <span style={{ opacity: 0.6 }}> / {maxRounds}</span>
-        </div>
+        {mode === "holes" ? (
+          <div>
+            <span style={{ opacity: 0.8 }}>Round</span>{" "}
+            <strong>{round}</strong>
+            <span style={{ opacity: 0.6 }}> / {maxRounds}</span>
+          </div>
+        ) : (
+          <div>
+            <span style={{ opacity: 0.8 }}>Points game</span>{" "}
+            <span style={{ opacity: 0.6 }}>•</span>{" "}
+            <span style={{ opacity: 0.8 }}>target</span>{" "}
+            <strong>{pointsTarget ?? "?"}</strong>
+          </div>
+        )}
 
-        <div>
-          <span style={{ opacity: 0.8 }}>Turn</span>{" "}
-          <strong>{curLabel}</strong>
-        </div>
+        {!matchOver ? (
+          <div>
+            <span style={{ opacity: 0.8 }}>Turn</span>{" "}
+            <strong>{curLabel}</strong>
+          </div>
+        ) : null}
       </div>
 
-      {finalTurnActive ? (
+      {matchOver ? (
+        <div
+          style={{
+            padding: "8px 10px",
+            borderRadius: 10,
+            background: "#1b1b1b",
+            border: "1px solid rgba(255,255,255,0.10)",
+            fontWeight: 900,
+          }}
+        >
+          Game Over • {reasonLabel()}
+          {winnerEmails ? <span style={{ fontWeight: 800 }}> • Winner: {winnerEmails}</span> : null}
+        </div>
+      ) : finalTurnActive ? (
         <div
           style={{
             padding: "8px 10px",

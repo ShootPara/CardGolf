@@ -1,35 +1,48 @@
 // FILE: /apps/web/src/ui/PilesPanel.tsx (REPLACE)
+//
+// Change:
+// - Suit letters -> symbols
+// - Red suits (♥ ♦) colored
 
 import type { Intent } from "./TurnControls";
 
 type PilesPanelProps = {
   gameState: any;
   intent: Intent;
-  // actions
   onDrawShoe: () => void;
   onDrawDiscard: () => void;
 };
 
-function cardLabel(card: any): string {
-  if (!card) return "";
-  const r = card.rank ?? card.r ?? card.value ?? "";
-  const s = card.suit ?? card.s ?? "";
-  return `${r}${s}`;
+function suitSymbol(s: any): string {
+  const v = String(s ?? "");
+  if (v === "C") return "♣";
+  if (v === "D") return "♦";
+  if (v === "H") return "♥";
+  if (v === "S") return "♠";
+  return v;
 }
 
-function cardView(card: any): string {
-  if (!card) return "";
-  const label = cardLabel(card);
-  return label || "🂡";
+function suitColor(symbol: string): string {
+  return symbol === "♥" || symbol === "♦" ? "#ff4d4d" : "white";
+}
+
+function renderCard(card: any) {
+  if (!card) return null;
+  const r = card.rank ?? card.r ?? card.value ?? "";
+  const sym = suitSymbol(card.suit ?? card.s ?? "");
+  return (
+    <span style={{ fontWeight: 900 }}>
+      <span>{String(r)}</span>
+      <span style={{ color: suitColor(sym) }}>{sym}</span>
+    </span>
+  );
 }
 
 export function PilesPanel({ gameState, intent, onDrawShoe, onDrawDiscard }: PilesPanelProps) {
   const you = gameState?.you ?? null;
 
   const isYourTurn =
-    you?.playerId && gameState?.currentTurnPlayerId
-      ? you.playerId === gameState.currentTurnPlayerId
-      : false;
+    you?.playerId && gameState?.currentTurnPlayerId ? you.playerId === gameState.currentTurnPlayerId : false;
 
   const initialRemaining = you?.initialRevealsRemaining ?? 0;
   const pendingDraw = gameState?.pendingDraw ?? null;
@@ -45,12 +58,7 @@ export function PilesPanel({ gameState, intent, onDrawShoe, onDrawDiscard }: Pil
   const inPlaying = gameState?.phase === "playing";
   const canAct = isYourTurn && inPlaying;
 
-  // You can draw only when:
-  // - it's your turn
-  // - you are not in initial reveal gate
-  // - you do not already have a pendingDraw
   const canDraw = canAct && initialRemaining === 0 && pendingDraw == null;
-
   const canDrawDiscard = canDraw && !!discardTop;
 
   const banner =
@@ -98,7 +106,6 @@ export function PilesPanel({ gameState, intent, onDrawShoe, onDrawDiscard }: Pil
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-        {/* Shoe */}
         <div
           style={tileStyle(canDraw)}
           onClick={() => {
@@ -109,32 +116,22 @@ export function PilesPanel({ gameState, intent, onDrawShoe, onDrawDiscard }: Pil
         >
           <div style={{ opacity: 0.7, fontSize: 12 }}>Shoe</div>
           <div style={{ fontSize: 34, lineHeight: "34px" }}>🂠</div>
-          <div style={{ opacity: 0.85, fontSize: 12 }}>
-            {shoeCount != null ? `${shoeCount} cards` : "(unknown)"}
-          </div>
+          <div style={{ opacity: 0.85, fontSize: 12 }}>{shoeCount != null ? `${shoeCount} cards` : "(unknown)"}</div>
         </div>
 
-        {/* Discard */}
         <div
           style={tileStyle(canDrawDiscard)}
           onClick={() => {
             if (!canDrawDiscard) return;
             onDrawDiscard();
           }}
-          title={
-            !discardTop ? "Discard is empty" : canDrawDiscard ? "Click to draw from discard" : "Can't draw right now"
-          }
+          title={!discardTop ? "Discard is empty" : canDrawDiscard ? "Click to draw from discard" : "Can't draw right now"}
         >
           <div style={{ opacity: 0.7, fontSize: 12 }}>Discard (top)</div>
-          <div style={{ fontSize: 28, fontWeight: 800 }}>
-            {discardTop ? cardView(discardTop) : "—"}
-          </div>
-          <div style={{ opacity: 0.75, fontSize: 12 }}>
-            {discardTop ? "Face-up" : "Empty"}
-          </div>
+          <div style={{ fontSize: 28, fontWeight: 900 }}>{discardTop ? renderCard(discardTop) : "—"}</div>
+          <div style={{ opacity: 0.75, fontSize: 12 }}>{discardTop ? "Face-up" : "Empty"}</div>
         </div>
 
-        {/* Pending draw */}
         <div
           style={{
             borderRadius: 12,
@@ -148,12 +145,8 @@ export function PilesPanel({ gameState, intent, onDrawShoe, onDrawDiscard }: Pil
           title="This is the card you drew (pending action)"
         >
           <div style={{ opacity: 0.7, fontSize: 12 }}>You drew</div>
-          <div style={{ fontSize: 28, fontWeight: 900 }}>
-            {pendingDraw ? cardView(pendingDraw) : "—"}
-          </div>
-          <div style={{ opacity: 0.75, fontSize: 12 }}>
-            {pendingDraw ? "Pending action" : "Nothing drawn"}
-          </div>
+          <div style={{ fontSize: 28, fontWeight: 900 }}>{pendingDraw ? renderCard(pendingDraw) : "—"}</div>
+          <div style={{ opacity: 0.75, fontSize: 12 }}>{pendingDraw ? "Pending action" : "Nothing drawn"}</div>
         </div>
       </div>
     </div>

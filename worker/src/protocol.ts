@@ -1,9 +1,12 @@
 /**
  * FILE: /worker/src/protocol.ts (REPLACE)
  *
- * Milestone 3:
- * - GAME_STATE includes round-end / final-turn info + scores.
- * - PASS disabled during final turn (server-enforced).
+ * Changes:
+ * - GAME_STATE now includes:
+ *   - rulesSummary: { mode, pointsTarget, maxRounds, rankValues }
+ *   - matchOver + winners + endedReason
+ *
+ * This keeps the UI from guessing and enables Points Mode end condition UX.
  */
 
 export type Role = "player" | "spectator";
@@ -27,6 +30,17 @@ export type VisibleSlot = {
   visible: boolean;
   card: Card | null;
 };
+
+export type RulesSummary = {
+  mode: "holes" | "points";
+  pointsTarget: number | null;
+  maxRounds: number | null; // null in points mode (unless you later choose to support an optional cap)
+  rankValues: Record<Rank, number>;
+};
+
+export type MatchEndedReason =
+  | "holes_max_rounds_reached"
+  | "points_target_reached";
 
 /* =========================
    Client -> Server
@@ -85,8 +99,11 @@ export type ServerToClient =
         status: TableStatus;
         phase: TablePhase;
 
+        // NEW: rules summary for UI
+        rulesSummary: RulesSummary;
+
         round: number;
-        maxRounds: number;
+        maxRounds: number; // kept for backwards compatibility UI; in points mode this may be a large sentinel
         currentTurnPlayerId: string | null;
 
         drawCount: number;
@@ -100,9 +117,14 @@ export type ServerToClient =
         finalTurnsRemainingCount: number;
         finalTurnTriggeredByPlayerId: string | null;
 
-        // Scores (present only right after round resolves; we keep them available for UI)
-        lastRoundScores: Record<string, number> | null;      // playerId -> score
-        cumulativeScores: Record<string, number> | null;     // playerId -> total across rounds completed
+        // Scores
+        lastRoundScores: Record<string, number> | null;
+        cumulativeScores: Record<string, number> | null;
+
+        // NEW: match end info
+        matchOver: boolean;
+        winners: string[] | null;          // playerIds
+        endedReason: MatchEndedReason | null;
 
         you: {
           playerId: string;
