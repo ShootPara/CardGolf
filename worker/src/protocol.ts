@@ -40,7 +40,8 @@ export type RulesSummary = {
 
 export type MatchEndedReason =
   | "holes_max_rounds_reached"
-  | "points_target_reached";
+  | "points_target_reached"
+  | "all_opponents_left";
 
 /* =========================
    Client -> Server
@@ -102,7 +103,12 @@ export type ServerToClient =
         // NEW: rules summary for UI
         rulesSummary: RulesSummary;
 
-        round: number;
+        
+
+        // Turn timer (for countdown UX)
+        turnDeadlineMs: number | null;
+        turnTimeoutMs: number;
+round: number;
         maxRounds: number; // kept for backwards compatibility UI; in points mode this may be a large sentinel
         currentTurnPlayerId: string | null;
 

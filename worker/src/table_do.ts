@@ -1,15 +1,18 @@
 /**
  * FILE: /worker/src/table_do.ts (REPLACE)
  *
- * Milestone 3:
- * - Round end trigger: when a player reveals their LAST face-down card (global reveal).
- * - Final turn: everyone gets one more turn. PASS disabled during final turn.
- * - After final turns: auto-reveal remaining face-down cards, score round, start next round or end game.
+ * Changes (Points Mode):
+ * - Implement endConditions.mode === "points":
+ *   - When any player reaches/exceeds pointsTarget after a round resolves, the match ends.
+ *   - Winner(s) are the lowest cumulative score at that time (Golf = low score wins).
+ * - Also compute winners for holes mode when maxRounds reached (lowest cumulative score).
  *
- * Keeps your Rule #1/#2/#3 from milestone 2:
- * - Must do 2 initial reveals on your first turn before drawing
- * - SWAP reveals swapped-in card face-up and puts replaced card on discard face-up
- * - DISCARD_DRAWN requires revealing a face-down card, unless you have exactly 1 face-down left (then use PASS)
+ * Changes (UI support):
+ * - GAME_STATE now includes rulesSummary (mode/pointsTarget/maxRounds/rankValues)
+ * - GAME_STATE now includes matchOver/winners/endedReason
+ *
+ * NOTE:
+ * - Still uses the existing Milestone 3 round-end + final-turn system.
  */
 
 import {
@@ -25,7 +28,11 @@ import {
   type Suit,
   type GridPos,
   type VisibleSlot,
+  type MatchEndedReason,
 } from "./protocol";
+
+import { reshuffleDiscardIntoShoeKeepingTop } from "./golf_deck";
+import { DEFAULT_GC_POLICY, ttlForStatusMs, purgeTableRow } from "./table_gc";
 
 export interface Env {
   TABLES: DurableObjectNamespace;
@@ -48,19 +55,21 @@ type DealtCard = { card: Card; revealed: boolean };
 type PlayerGame = {
   playerId: string;
   grid: Record<GridPos, DealtCard>;
-  initialRevealsRemaining: number; // starts at 2 each round
+  initialRevealsRemaining: number;
   pendingDraw: Card | null;
 };
 
 type RoundMeta = {
   finalTurnActive: boolean;
-  finalTurnsRemaining: Set<string>; // playerIds who still need their “one more turn”
+  finalTurnsRemaining: Set<string>;
   triggeredByPlayerId: string | null;
 };
 
 type ScoreMeta = {
   lastRoundScores: Record<string, number> | null;
-  cumulativeScores: Record<string, number>; // running totals for completed rounds
+  cumulativeScores: Record<string, number>;
+  winners: string[] | null;
+  endedReason: MatchEndedReason | null;
 };
 
 type GameState = {
@@ -69,7 +78,7 @@ type GameState = {
   players: Map<string, PlayerGame>;
 
   round: number;
-  maxRounds: number;
+  maxRounds: number; // holes mode uses 9; points mode uses a large sentinel but ignored unless you set a cap later
 
   turnOrder: string[];
   currentTurnPlayerId: string | null;
@@ -96,6 +105,9 @@ const MAX_PLAYERS = 6;
 const CHAT_MAX = 200;
 const CHAT_MAX_LEN = 280;
 const CHAT_RATE_MS = 1000;
+
+// Turn timeout (server-side) to prevent deadlocks
+const TURN_TIMEOUT_MS = 120000; // 120s
 
 const ALL_POS: GridPos[] = [1, 2, 3, 4, 5, 6];
 const COLS: Array<[GridPos, GridPos]> = [
@@ -157,10 +169,7 @@ export class TableDO {
         return json({ ok: false, error: "Need at least 1 connected player to start." }, 409);
       }
 
-      await this.env.cardgolf
-        .prepare(`UPDATE tables SET status='started' WHERE table_id=?`)
-        .bind(this.table.config.tableId)
-        .run();
+      await this.env.cardgolf.prepare(`UPDATE tables SET status='started' WHERE table_id=?`).bind(this.table.config.tableId).run();
 
       this.table.config.status = "started";
       this.table.phase = "playing";
@@ -168,6 +177,9 @@ export class TableDO {
       if (!this.table.game) {
         this.table.game = this.buildNewGameFromRules(this.table.config.rulesJson, this.table.players);
       }
+
+      // Start turn timer
+      void this.markTurnStart();
 
       this.broadcast({ type: "GAME_STARTED", payload: { tableId: this.table.config.tableId } } as ServerToClient);
       this.broadcastGameState();
@@ -261,166 +273,238 @@ export class TableDO {
   }
 
   // =========================
-  // Message handling
+  // Socket bookkeeping
   // =========================
 
   private bindSocket(ws: WebSocket, who: { id: string; role: Role; email: string }) {
-    ws.addEventListener("message", (evt) => {
-      const raw = typeof evt.data === "string" ? evt.data : "";
-      const parsed = safeJsonParse<ClientToServer>(raw);
-      if (!parsed.ok) return this.send(ws, { type: "ERROR", payload: { code: "BAD_JSON", message: "Invalid JSON" } });
-      void this.onMessage(ws, who, parsed.value);
-    });
-
-    ws.addEventListener("close", () => void this.onClose(who));
-    ws.addEventListener("error", () => void this.onClose(who));
+    ws.addEventListener("message", (ev) => this.onWsMessage(ws, who, ev));
+    ws.addEventListener("close", () => this.onWsClose(ws, who));
   }
 
-  private async onMessage(ws: WebSocket, who: { id: string; role: Role; email: string }, msg: ClientToServer) {
-    switch (msg.type) {
-      case "PING": return this.send(ws, { type: "PONG" });
-      case "CHAT_SEND": return this.handleChat(ws, who, msg.payload?.text);
-
-// owner controls
-case "OWNER_DELEGATE": return this.handleOwnerDelegate(ws, who, (msg as any).payload?.toPlayerId);
-case "MUTE": return this.handleMute(ws, who, (msg as any).payload?.targetId, (msg as any).payload?.targetRole);
-case "UNMUTE": return this.handleUnmute(ws, who, (msg as any).payload?.targetId, (msg as any).payload?.targetRole);
-case "KICK": return this.handleKick(ws, who, (msg as any).payload?.targetId, (msg as any).payload?.targetRole);
-
-      // gameplay
-      case "DRAW_SHOE": return this.handleDraw(ws, who, "shoe");
-      case "DRAW_DISCARD": return this.handleDraw(ws, who, "discard");
-      case "SWAP": return this.handleSwap(ws, who, msg.payload?.pos);
-      case "DISCARD_DRAWN": return this.handleDiscardDrawn(ws, who, msg.payload?.revealPos);
-      case "PASS": return this.handlePass(ws, who);
-      case "REVEAL": return this.handleReveal(ws, who, msg.payload?.pos);
-
-      default:
-        return this.err(ws, "UNKNOWN", "Unknown message type");
-    }
-  }
-
-  private async onClose(who: { id: string; role: Role }) {
+  private onWsClose(ws: WebSocket, who: { id: string; role: Role; email: string }) {
     if (who.role === "player") {
-      const idx = this.table.players.findIndex((p) => p.playerId === who.id);
-      if (idx >= 0) {
-        const leaving = this.table.players[idx];
-        this.table.players.splice(idx, 1);
-
-        if (this.table.game) {
-          this.table.game.turnOrder = this.table.game.turnOrder.filter((pid) => pid !== leaving.playerId);
-          this.table.game.roundMeta.finalTurnsRemaining.delete(leaving.playerId);
-          this.table.game.players.delete(leaving.playerId);
-
-          if (this.table.game.currentTurnPlayerId === leaving.playerId) {
-            this.advanceTurn();
-          }
-        }
-
-        if (this.table.ownerPlayerId === leaving.playerId) {
-          this.table.ownerPlayerId = this.table.players.length > 0 ? this.table.players[0].playerId : null;
-        }
-      }
+      this.table.players = this.table.players.filter((p) => p.ws !== ws);
     } else {
-      const idx = this.table.spectators.findIndex((s) => s.spectatorId === who.id);
-      if (idx >= 0) this.table.spectators.splice(idx, 1);
+      this.table.spectators = this.table.spectators.filter((s) => s.ws !== ws);
     }
-
     this.broadcastState();
-
-    if (this.table.players.length === 0 && this.table.spectators.length === 0 && this.table.config) {
-      const tableId = this.table.config.tableId;
-      this.table.config = null;
-      this.table.game = null;
-      await this.env.cardgolf.prepare(`DELETE FROM tables WHERE table_id = ?`).bind(tableId).run();
-    }
   }
 
+  private onWsMessage(ws: WebSocket, who: { id: string; role: Role; email: string }, ev: MessageEvent) {
+    const raw = typeof ev.data === "string" ? ev.data : "";
+    const parsed = safeJsonParse<ClientToServer>(raw);
+    if (!parsed.ok) return this.err(ws, "BAD_JSON", "Invalid JSON");
 
-/* =========================
- * Owner controls
- * ========================= */
+    const msg = parsed.value;
 
-private requireOwner(who: { id: string; role: Role }, ws: WebSocket): boolean {
-  if (who.role !== "player") {
-    this.err(ws, "FORBIDDEN", "Only a player can be the table owner.");
-    return false;
+    // Chat
+    if (msg.type === "CHAT_SEND") return this.handleChatSend(ws, who, msg.payload?.text);
+    if (msg.type === "PING") return this.send(ws, { type: "PONG" } as ServerToClient);
+
+    // Turn loop
+    if (msg.type === "REVEAL") return this.handleReveal(ws, who, msg.payload?.pos);
+    if (msg.type === "DRAW_SHOE") return this.handleDrawShoe(ws, who);
+    if (msg.type === "DRAW_DISCARD") return this.handleDrawDiscard(ws, who);
+    if (msg.type === "SWAP") return this.handleSwap(ws, who, msg.payload?.pos);
+    if (msg.type === "DISCARD_DRAWN") return this.handleDiscardDrawn(ws, who, msg.payload?.revealPos);
+    if (msg.type === "PASS") return this.handlePass(ws, who);
+
+    return this.err(ws, "UNKNOWN", "Unknown message type");
   }
-  const ownerId = this.table.ownerPlayerId ?? this.table.config?.creatorPlayerId ?? null;
-  if (!ownerId || who.id !== ownerId) {
-    this.err(ws, "FORBIDDEN", "Only the table owner can perform this action.");
-    return false;
-  }
-  return true;
-}
-
-private handleOwnerDelegate(ws: WebSocket, who: { id: string; role: Role }, toPlayerId?: string) {
-  if (!this.requireOwner(who, ws)) return;
-  if (!toPlayerId) return this.err(ws, "BAD_REQUEST", "toPlayerId required.");
-
-  const exists = this.table.players.some((p) => p.playerId === toPlayerId);
-  if (!exists) return this.err(ws, "NOT_FOUND", "Target player not found/connected.");
-
-  this.table.ownerPlayerId = toPlayerId;
-  this.broadcastState();
-}
-
-private handleMute(ws: WebSocket, who: { id: string; role: Role }, targetId?: string, targetRole?: Role) {
-  if (!this.requireOwner(who, ws)) return;
-  if (!targetId || !targetRole) return this.err(ws, "BAD_REQUEST", "targetId + targetRole required.");
-
-  if (targetRole === "player") this.table.mutedPlayers.add(targetId);
-  else this.table.mutedSpectators.add(targetId);
-
-  this.broadcastState();
-}
-
-private handleUnmute(ws: WebSocket, who: { id: string; role: Role }, targetId?: string, targetRole?: Role) {
-  if (!this.requireOwner(who, ws)) return;
-  if (!targetId || !targetRole) return this.err(ws, "BAD_REQUEST", "targetId + targetRole required.");
-
-  if (targetRole === "player") this.table.mutedPlayers.delete(targetId);
-  else this.table.mutedSpectators.delete(targetId);
-
-  this.broadcastState();
-}
-
-private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: string, targetRole?: Role) {
-  if (!this.requireOwner(who, ws)) return;
-  if (!targetId || !targetRole) return this.err(ws, "BAD_REQUEST", "targetId + targetRole required.");
-
-  if (targetRole === "player") {
-    const target = this.table.players.find((p) => p.playerId === targetId);
-    if (!target) return this.err(ws, "NOT_FOUND", "Player not found.");
-
-    try { target.ws.close(4001, "Kicked by owner"); } catch {}
-    this.table.players = this.table.players.filter((p) => p.playerId !== targetId);
-
-    // If owner kicked themself (rare), reassign to first remaining player
-    if (this.table.ownerPlayerId === targetId) {
-      this.table.ownerPlayerId = this.table.players.length > 0 ? this.table.players[0].playerId : null;
-    }
-  } else {
-    const target = this.table.spectators.find((s) => s.spectatorId === targetId);
-    if (!target) return this.err(ws, "NOT_FOUND", "Spectator not found.");
-
-    try { target.ws.close(4001, "Kicked by owner"); } catch {}
-    this.table.spectators = this.table.spectators.filter((s) => s.spectatorId !== targetId);
-  }
-
-  this.broadcastState();
-}
 
   // =========================
-  // Gameplay rules
+  // Messaging helpers
+  // =========================
+
+  private send(ws: WebSocket, msg: ServerToClient) {
+    try {
+      ws.send(JSON.stringify(msg));
+    } catch {
+      // ignore
+    }
+  }
+
+  private broadcast(msg: ServerToClient) {
+    for (const p of this.table.players) this.send(p.ws, msg);
+    for (const s of this.table.spectators) this.send(s.ws, msg);
+  }
+
+  private broadcastState() {
+    if (!this.table.config) return;
+
+    this.broadcast({
+      type: "TABLE_STATE",
+      payload: {
+        tableId: this.table.config.tableId,
+        status: this.table.config.status,
+        phase: this.table.phase,
+        ownerPlayerId: this.table.ownerPlayerId,
+        players: this.table.players.map((p) => ({ playerId: p.playerId, email: p.email, joinedAt: p.joinedAt })),
+        spectators: this.table.spectators.map((s) => ({ spectatorId: s.spectatorId, email: s.email, joinedAt: s.joinedAt })),
+        mutedPlayers: [...this.table.mutedPlayers],
+        mutedSpectators: [...this.table.mutedSpectators],
+        spectatorChatAllowed: this.table.config.spectatorChatAllowed,
+      },
+    } as ServerToClient);
+  }
+
+  private broadcastGameState() {
+    // players get a player-specific view (pendingDraw only for active player)
+    for (const p of this.table.players) {
+      this.send(p.ws, this.makeGameStateMessage(p.playerId));
+    }
+    // spectators get a neutral view (no pendingDraw)
+    for (const s of this.table.spectators) {
+      this.send(s.ws, this.makeGameStateMessage(null));
+    }
+  }
+
+  private err(ws: WebSocket, code: string, message: string) {
+    this.send(ws, { type: "ERROR", payload: { code, message } } as ServerToClient);
+  }
+
+  // =========================
+  // Config / D1 helpers
+  // =========================
+
+  private getTableIdForThisRequest(url: URL): string | null {
+    return url.searchParams.get("table_id") ?? url.searchParams.get("tableId");
+  }
+
+  private async ensureConfigLoaded(tableId: string) {
+    if (this.table.config) return;
+
+    const row = await this.env.cardgolf
+      .prepare(`SELECT table_id, creator_player_id, rules_json, spectator_chat_allowed, status FROM tables WHERE table_id=?`)
+      .bind(tableId)
+      .first<any>();
+
+    if (!row) return;
+
+    this.table.config = {
+      tableId: row.table_id,
+      creatorPlayerId: row.creator_player_id,
+      rulesJson: typeof row.rules_json === "string" ? JSON.parse(row.rules_json) : row.rules_json,
+      spectatorChatAllowed: !!row.spectator_chat_allowed,
+      status: row.status as TableStatus,
+    };
+
+    if (!this.table.ownerPlayerId) this.table.ownerPlayerId = this.table.config.creatorPlayerId;
+  }
+
+  private async refreshStatusFromD1(tableId: string) {
+    const row = await this.env.cardgolf.prepare(`SELECT status FROM tables WHERE table_id=?`).bind(tableId).first<any>();
+    if (row && this.table.config) this.table.config.status = row.status as TableStatus;
+  }
+
+  /* =========================
+     GC / cleanup helpers
+  ========================= */
+
+  private connCount(): number {
+    return this.table.players.length + this.table.spectators.length;
+  }
+
+  private async noteActivityNow(): Promise<void> {
+    // Durable Object storage persists even when in-memory state resets.
+    await this.state.storage.put("lastActivityMs", Date.now());
+  }
+
+  private async scheduleGcAlarmSoon(): Promise<void> {
+    // Always schedule an alarm when we become empty.
+    // The alarm handler decides whether to delete based on status + lastActivity + TTL.
+    // 2 minutes keeps it responsive without being spammy.
+    await this.state.storage.setAlarm(Date.now() + 2 * 60 * 1000);
+  }
+
+  private async tryPurgeIfStale(): Promise<boolean> {
+    // Only purge if there are no connections.
+    if (this.connCount() > 0) return false;
+
+    const cfg = this.table.config;
+    if (!cfg?.tableId) return false;
+
+    const lastActivityMs = (await this.state.storage.get<number>("lastActivityMs")) ?? Date.now();
+    const ttlMs = ttlForStatusMs(cfg.status, DEFAULT_GC_POLICY);
+
+    const ageMs = Date.now() - lastActivityMs;
+    if (ageMs < ttlMs) {
+      // Not stale yet; keep checking later.
+      await this.scheduleGcAlarmSoon();
+      return false;
+    }
+
+    // Purge the D1 row. After this, future joins should 404 (table doesn't exist).
+    await purgeTableRow(this.env as any, cfg.tableId);
+
+    // Clear DO storage & in-memory state so it doesn’t “resurrect” phantom state.
+    await this.state.storage.deleteAll();
+    this.table.config = null;
+    this.table.game = null;
+    this.table.chat = [];
+    this.table.phase = "lobby";
+
+    return true;
+  }
+
+  // =========================
+  // Chat
+  // =========================
+
+  private handleChatSend(ws: WebSocket, who: { id: string; role: Role; email: string }, text?: string) {
+    if (!this.table.config) return;
+
+    if (who.role === "spectator" && !this.table.config.spectatorChatAllowed) {
+      return this.err(ws, "CHAT_DISABLED", "Spectator chat is disabled.");
+    }
+
+    const now = Date.now();
+    const lastAt = this.lastChatAtBySocket.get(ws) ?? 0;
+    if (now - lastAt < CHAT_RATE_MS) return this.err(ws, "RATE_LIMIT", "Slow down.");
+    this.lastChatAtBySocket.set(ws, now);
+
+    const t = (text ?? "").trim();
+    if (!t) return;
+    if (t.length > CHAT_MAX_LEN) return this.err(ws, "TOO_LONG", `Chat max length is ${CHAT_MAX_LEN}.`);
+
+    if (who.role === "player" && this.table.mutedPlayers.has(who.id)) return this.err(ws, "MUTED", "You are muted.");
+    if (who.role === "spectator" && this.table.mutedSpectators.has(who.id)) return this.err(ws, "MUTED", "You are muted.");
+
+    const msg: ChatMessage = {
+      id: makeEphemeralId("m"),
+      ts: new Date().toISOString(),
+      from: { id: who.id, role: who.role, email: who.email },
+      text: t,
+    };
+
+    this.table.chat.push(msg);
+    if (this.table.chat.length > CHAT_MAX) this.table.chat.splice(0, this.table.chat.length - CHAT_MAX);
+
+    this.broadcast({ type: "CHAT_APPEND", payload: { message: msg } } as ServerToClient);
+  }
+
+  // =========================
+  // Turn helpers
   // =========================
 
   private requireStartedPlayer(who: { id: string; role: Role }, ws: WebSocket): PlayerGame | null {
-    if (who.role !== "player") { this.err(ws, "FORBIDDEN", "Only players can do gameplay actions."); return null; }
-    if (!this.table.config || this.table.config.status !== "started") { this.err(ws, "BAD_STATE", "Game not started."); return null; }
-    if (!this.table.game) { this.err(ws, "BAD_STATE", "Game state missing."); return null; }
+    if (who.role !== "player") {
+      this.err(ws, "FORBIDDEN", "Spectators cannot perform game actions.");
+      return null;
+    }
+    if (!this.table.config || this.table.config.status !== "started") {
+      this.err(ws, "BAD_STATE", "Game not started.");
+      return null;
+    }
+    if (!this.table.game) {
+      this.err(ws, "BAD_STATE", "Game state missing.");
+      return null;
+    }
     const pg = this.table.game.players.get(who.id);
-    if (!pg) { this.err(ws, "NOT_FOUND", "Player not found in game."); return null; }
+    if (!pg) {
+      this.err(ws, "NOT_FOUND", "Player not found in game.");
+      return null;
+    }
     return pg;
   }
 
@@ -446,12 +530,170 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
     const g = this.table.game;
     if (!g) return;
     const order = g.turnOrder;
-    if (order.length === 0) { g.currentTurnPlayerId = null; return; }
+    if (order.length === 0) {
+      g.currentTurnPlayerId = null;
+      return;
+    }
     const cur = g.currentTurnPlayerId;
-    if (!cur) { g.currentTurnPlayerId = order[0]; return; }
+    if (!cur) {
+      g.currentTurnPlayerId = order[0];
+      return;
+    }
     const idx = order.indexOf(cur);
     g.currentTurnPlayerId = idx >= 0 ? order[(idx + 1) % order.length] : order[0];
   }
+
+/* =========================
+   Turn timer (deadlock prevention)
+========================= */
+
+private async markTurnStart() {
+  const g = this.table.game;
+  const cfg = this.table.config;
+  if (!g || !cfg) return;
+  if (cfg.status !== "started") return;
+
+  const pid = g.currentTurnPlayerId;
+  if (!pid) return;
+
+  const deadlineMs = Date.now() + TURN_TIMEOUT_MS;
+
+  g.turnDeadlineMs = deadlineMs;
+  g.turnTimeoutMs = TURN_TIMEOUT_MS;
+  await this.state.storage.put("turnDeadlineMs", deadlineMs);
+  await this.state.storage.put("turnPlayerId", pid);
+
+  await this.state.storage.setAlarm(deadlineMs);
+}
+
+private sendSystemChat(text: string) {
+  const t = (text ?? "").trim();
+  if (!t) return;
+  const clipped = t.length > CHAT_MAX_LEN ? t.slice(0, CHAT_MAX_LEN) : t;
+
+  const msg: ChatMessage = {
+    id: makeEphemeralId("sys"),
+    ts: new Date().toISOString(),
+    from: { id: "system", role: "player", email: "SYSTEM" },
+    text: clipped,
+  };
+
+  this.table.chat.push(msg);
+  if (this.table.chat.length > CHAT_MAX) this.table.chat.splice(0, this.table.chat.length - CHAT_MAX);
+
+  this.broadcast({ type: "CHAT_APPEND", payload: { message: msg } } as ServerToClient);
+}
+
+private async handleTurnTimeoutIfDue() {
+  const cfg = this.table.config;
+  const g = this.table.game;
+  if (!cfg || !g) return;
+  if (cfg.status !== "started") return;
+
+  const deadlineMs = await this.state.storage.get<number>("turnDeadlineMs");
+  const pid = await this.state.storage.get<string>("turnPlayerId");
+
+  if (!deadlineMs || !pid) return;
+
+  if (Date.now() < deadlineMs) {
+    await this.state.storage.setAlarm(deadlineMs);
+    return;
+  }
+
+  if (g.currentTurnPlayerId !== pid) {
+    void this.markTurnStart();
+    return;
+  }
+
+  const pg = g.players.get(pid);
+  if (!pg) {
+    this.advanceTurn();
+    void this.markTurnStart();
+    this.broadcastGameState();
+    this.broadcastState();
+    return;
+  }
+
+  if (pg.pendingDraw) {
+    g.discard.push(pg.pendingDraw);
+    pg.pendingDraw = null;
+
+    this.sendSystemChat(`SYSTEM: ${pid} timed out — discarded drawn card.`);
+
+    this.endTurnForPlayer(pid);
+    void this.markTurnStart();
+
+    this.broadcastGameState();
+    this.broadcastState();
+    return;
+  }
+
+  const revealFirstFaceDown = (): boolean => {
+    for (const pos of ALL_POS) {
+      if (!pg.grid[pos].revealed) {
+        pg.grid[pos].revealed = true;
+        return true;
+      }
+    }
+    return false;
+  };
+
+  if (pg.initialRevealsRemaining > 0) {
+    while (pg.initialRevealsRemaining > 0) {
+      const did = revealFirstFaceDown();
+      if (!did) break;
+      pg.initialRevealsRemaining -= 1;
+    }
+
+
+    this.sendSystemChat(`SYSTEM: ${pid} timed out — auto-revealed required cards.`);
+
+    this.maybeTriggerFinalTurn(pid);
+    this.endTurnForPlayer(pid);
+    void this.markTurnStart();
+
+    this.broadcastGameState();
+    this.broadcastState();
+    return;
+  }
+
+  const did = revealFirstFaceDown();
+  if (did) this.maybeTriggerFinalTurn(pid);
+
+
+  this.sendSystemChat(`SYSTEM: ${pid} timed out — auto-revealed a card.`);
+
+  this.endTurnForPlayer(pid);
+  void this.markTurnStart();
+
+  this.broadcastGameState();
+  this.broadcastState();
+}
+
+/* =========================
+   Leave / Kick mid-game rules
+========================= */
+
+private async removePlayerFromLiveGame(playerId: string) {
+  const cfg = this.table.config;
+  const g = this.table.game;
+  if (!cfg || !g) return;
+
+  g.turnOrder = g.turnOrder.filter((pid) => pid !== playerId);
+  g.roundMeta.finalTurnsRemaining.delete(playerId);
+  g.players.delete(playerId);
+
+  if (g.currentTurnPlayerId === playerId) {
+    this.advanceTurn();
+  }
+
+  if (cfg.status === "started" && g.turnOrder.length <= 1) {
+    this.endMatch("all_opponents_left" as any);
+    return;
+  }
+
+  void this.markTurnStart();
+}
 
   private maybeTriggerFinalTurn(playerId: string) {
     const g = this.table.game;
@@ -464,38 +706,84 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
 
     if (this.faceDownCount(pg) !== 0) return;
 
-    // Trigger final turn for everyone
     g.roundMeta.finalTurnActive = true;
     g.roundMeta.triggeredByPlayerId = playerId;
-
     g.roundMeta.finalTurnsRemaining = new Set<string>(g.turnOrder);
-
-    // PASS is disabled during final turn (we enforce in handlePass)
   }
 
   private endTurnForPlayer(playerId: string) {
     const g = this.table.game;
     if (!g) return;
 
-    // If final turn active, mark this player's “one more turn” as used
     if (g.roundMeta.finalTurnActive) {
       g.roundMeta.finalTurnsRemaining.delete(playerId);
 
-      // If everybody has taken their final turn, resolve the round now
       if (g.roundMeta.finalTurnsRemaining.size === 0) {
         this.resolveRoundAndMaybeStartNext();
         return;
       }
     }
 
-    // Normal advance
     this.advanceTurn();
+  }
+
+  // =========================
+  // NEW: scoring end helpers
+  // =========================
+
+  private computeLowestWinners(cumulative: Record<string, number>, playerIds: string[]): string[] {
+    let best = Number.POSITIVE_INFINITY;
+    for (const pid of playerIds) {
+      const v = cumulative[pid];
+      if (typeof v === "number" && Number.isFinite(v)) best = Math.min(best, v);
+    }
+    if (!Number.isFinite(best)) return [];
+    return playerIds.filter((pid) => cumulative[pid] === best);
+  }
+
+  private shouldEndByPointsTarget(rulesJson: any, cumulative: Record<string, number>, playerIds: string[]): boolean {
+    const mode = rulesJson?.endConditions?.mode;
+    if (mode !== "points") return false;
+
+    const pt = rulesJson?.endConditions?.pointsTarget;
+    if (typeof pt !== "number" || !Number.isFinite(pt) || pt <= 0) return false;
+
+    // End the match when ANYONE reaches/exceeds target (classic "play to 100" stop condition)
+    for (const pid of playerIds) {
+      const v = cumulative[pid];
+      if (typeof v === "number" && Number.isFinite(v) && v >= pt) return true;
+    }
+    return false;
+  }
+
+  private endMatch(reason: MatchEndedReason) {
+    const g = this.table.game;
+    const cfg = this.table.config;
+    if (!g || !cfg) return;
+
+    cfg.status = "ended";
+    this.table.phase = "playing";
+
+    g.scoreMeta.endedReason = reason;
+
+    // winners are always LOWEST cumulative score (Golf = low wins)
+    g.scoreMeta.winners = this.computeLowestWinners(g.scoreMeta.cumulativeScores, g.turnOrder);
+
+    // Best-effort persist ended status
+    void this.env.cardgolf.prepare(`UPDATE tables SET status='ended' WHERE table_id=?`).bind(cfg.tableId).run();
+
+    this.broadcast({ type: "GAME_ENDED", payload: { tableId: cfg.tableId } } as ServerToClient);
+    this.broadcastGameState();
+    this.broadcastState();
   }
 
   private resolveRoundAndMaybeStartNext() {
     const g = this.table.game;
     const cfg = this.table.config;
     if (!g || !cfg) return;
+
+    const rulesJson = cfg.rulesJson ?? {};
+    const mode: "holes" | "points" = rulesJson?.endConditions?.mode === "points" ? "points" : "holes";
 
     // Auto-reveal all remaining face-down cards
     for (const pid of g.turnOrder) {
@@ -504,39 +792,35 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
       for (const pos of ALL_POS) pg.grid[pos].revealed = true;
     }
 
-    // Score
+    // Score this round and update cumulative
     const last: Record<string, number> = {};
     for (const pid of g.turnOrder) {
       const pg = g.players.get(pid);
       if (!pg) continue;
-      const s = this.totalGridScore(pg.grid, cfg.rulesJson);
+      const s = this.totalGridScore(pg.grid, rulesJson);
       last[pid] = s;
       g.scoreMeta.cumulativeScores[pid] = (g.scoreMeta.cumulativeScores[pid] ?? 0) + s;
     }
     g.scoreMeta.lastRoundScores = last;
 
-    // Round increment / end game
-    if (g.round >= g.maxRounds) {
-      // End match
-      if (this.table.config) this.table.config.status = "ended";
-      this.table.phase = "playing"; // UI can still show board + scores
-
-      // Best-effort persist ended status
-      void this.env.cardgolf
-        .prepare(`UPDATE tables SET status='ended' WHERE table_id=?`)
-        .bind(cfg.tableId)
-        .run();
-
-      this.broadcast({ type: "GAME_ENDED", payload: { tableId: cfg.tableId } } as ServerToClient);
-      this.broadcastGameState();
-      this.broadcastState();
+    // ---------- NEW: Points Mode end condition ----------
+    if (this.shouldEndByPointsTarget(rulesJson, g.scoreMeta.cumulativeScores, g.turnOrder)) {
+      this.endMatch("points_target_reached");
       return;
     }
 
-    // Start next round (fresh shuffle + deal; reset per-player state)
+    // ---------- Holes mode (or fallback cap) ----------
+    // In holes mode, we end when round >= maxRounds.
+    // In points mode, we *do not* auto-end by maxRounds unless you later choose to support an optional cap.
+    if (mode === "holes" && g.round >= g.maxRounds) {
+      this.endMatch("holes_max_rounds_reached");
+      return;
+    }
+
+    // Start next round
     g.round += 1;
 
-    const deckCount = Number(cfg.rulesJson?.gameVariant?.deckCount ?? 2);
+    const deckCount = Number(rulesJson?.gameVariant?.deckCount ?? 2);
 
     g.shoe = this.buildShoe(deckCount);
     this.shuffleInPlace(g.shoe);
@@ -546,7 +830,6 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
       const pg = g.players.get(pid);
       if (!pg) continue;
 
-      // deal new 6
       const grid = {} as Record<GridPos, DealtCard>;
       for (const pos of ALL_POS) {
         const card = g.shoe.pop();
@@ -563,14 +846,16 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
     const firstDiscard = g.shoe.pop();
     g.discard = firstDiscard ? [firstDiscard] : [];
 
-
     // Reset final turn meta
     g.roundMeta.finalTurnActive = false;
     g.roundMeta.triggeredByPlayerId = null;
     g.roundMeta.finalTurnsRemaining = new Set<string>();
 
-    // Start at first player again (keeps it simple; can rotate later)
+    // Start at first player again (simple)
     g.currentTurnPlayerId = g.turnOrder.length > 0 ? g.turnOrder[0] : null;
+
+    // Start timer for the new round
+    void this.markTurnStart();
 
     this.broadcastGameState();
     this.broadcastState();
@@ -591,37 +876,63 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
 
     pg.grid[pos].revealed = true;
 
-    // Consume initial reveals quota
     if (pg.initialRevealsRemaining > 0) pg.initialRevealsRemaining--;
 
-    // Trigger final turn if this was their last face-down
     this.maybeTriggerFinalTurn(who.id);
 
     this.broadcastGameState();
     this.broadcastState();
+
+    // If initial reveal gate is still active, do not end the turn yet.
+    if (pg.initialRevealsRemaining > 0) return;
+
+    // During initial gate, player may reveal multiple. After gate, a reveal ends turn.
+    if (g.roundMeta.finalTurnActive) {
+      // if they revealed their last card during final turn, they still "used" their final turn; endTurnForPlayer handles meta
+    }
+    this.endTurnForPlayer(who.id);
+    this.broadcastGameState();
+    this.broadcastState();
   }
 
-  private handleDraw(ws: WebSocket, who: { id: string; role: Role }, from: "shoe" | "discard") {
+  private handleDrawShoe(ws: WebSocket, who: { id: string; role: Role }) {
     const pg = this.requireStartedPlayer(who, ws);
     const g = this.table.game;
     if (!pg || !g) return;
 
     if (!this.isPlayersTurn(who.id)) return this.err(ws, "NOT_YOUR_TURN", "It is not your turn.");
     if (!this.enforceInitialReveals(pg, ws)) return;
+    if (pg.pendingDraw) return this.err(ws, "BAD_STATE", "You already drew a card.");
 
-    if (pg.pendingDraw) return this.err(ws, "BAD_STATE", "You already drew a card this turn.");
-
-    if (from === "shoe") {
-      const c = g.shoe.pop();
-      if (!c) return this.err(ws, "EMPTY_SHOE", "No cards left in shoe.");
-      pg.pendingDraw = c;
-    } else {
-      const c = g.discard.pop();
-      if (!c) return this.err(ws, "EMPTY_DISCARD", "Discard pile is empty.");
-      pg.pendingDraw = c;
+    // If shoe is empty, attempt reshuffle from discard (keeping discardTop)
+    if (g.shoe.length === 0) {
+      const reshuffled = reshuffleDiscardIntoShoeKeepingTop(g.shoe, g.discard, (arr) => this.shuffleInPlace(arr));
+      if (!reshuffled) return this.err(ws, "EMPTY", "Shoe is empty.");
     }
 
+    const c = g.shoe.pop();
+    if (!c) return this.err(ws, "EMPTY", "Shoe is empty.");
+    pg.pendingDraw = c;
+
     this.broadcastGameState();
+    this.broadcastState();
+  }
+
+  private handleDrawDiscard(ws: WebSocket, who: { id: string; role: Role }) {
+    const pg = this.requireStartedPlayer(who, ws);
+    const g = this.table.game;
+    if (!pg || !g) return;
+
+    if (!this.isPlayersTurn(who.id)) return this.err(ws, "NOT_YOUR_TURN", "It is not your turn.");
+    if (!this.enforceInitialReveals(pg, ws)) return;
+    if (pg.pendingDraw) return this.err(ws, "BAD_STATE", "You already drew a card.");
+    if (g.discard.length === 0) return this.err(ws, "EMPTY", "Discard is empty.");
+
+    const c = g.discard.pop()!;
+    pg.pendingDraw = c;
+
+    this.broadcastGameState();
+    this.broadcastState();
   }
 
   private handleSwap(ws: WebSocket, who: { id: string; role: Role }, pos?: GridPos) {
@@ -630,25 +941,21 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
     if (!pg || !g) return;
 
     if (!this.isPlayersTurn(who.id)) return this.err(ws, "NOT_YOUR_TURN", "It is not your turn.");
-    if (!this.enforceInitialReveals(pg, ws)) return;
-
-    if (!pg.pendingDraw) return this.err(ws, "BAD_STATE", "You must draw before swapping.");
     if (!pos || !ALL_POS.includes(pos)) return this.err(ws, "BAD_REQUEST", "pos must be 1..6.");
+    if (!pg.pendingDraw) return this.err(ws, "BAD_STATE", "No pending draw to swap.");
 
     const drawn = pg.pendingDraw;
-    const old = pg.grid[pos].card;
+    const replaced = pg.grid[pos].card;
 
-    // old goes to discard face-up
-    g.discard.push(old);
+    // Put replaced onto discard face-up
+    g.discard.push(replaced);
 
-    // drawn becomes face-up in grid
+    // Swap in drawn, face-up
     pg.grid[pos] = { card: drawn, revealed: true };
+
+    // Clear pending
     pg.pendingDraw = null;
 
-    // Trigger final-turn if this reveal completed their board
-    this.maybeTriggerFinalTurn(who.id);
-
-    // End turn
     this.endTurnForPlayer(who.id);
 
     this.broadcastGameState();
@@ -658,46 +965,38 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
   private handleDiscardDrawn(ws: WebSocket, who: { id: string; role: Role }, revealPos?: GridPos) {
     const pg = this.requireStartedPlayer(who, ws);
     const g = this.table.game;
-    if (!pg || !g) return;
+    const cfg = this.table.config;
+    if (!pg || !g || !cfg) return;
 
     if (!this.isPlayersTurn(who.id)) return this.err(ws, "NOT_YOUR_TURN", "It is not your turn.");
-    if (!this.enforceInitialReveals(pg, ws)) return;
+    if (!pg.pendingDraw) return this.err(ws, "BAD_STATE", "No pending draw to discard.");
 
-    if (!pg.pendingDraw) return this.err(ws, "BAD_STATE", "You must draw before discarding.");
+    const fd = this.faceDownCount(pg);
 
-    const fdBefore = this.faceDownCount(pg);
+    // If exactly 1 face-down remains, DISCARD_DRAWN must include revealPos (or use PASS as alternative)
+    if (fd === 1) {
+      if (!revealPos) return this.err(ws, "MUST_REVEAL", "You must reveal your last face-down card OR use PASS.");
+    }
 
-    // Always discard the drawn card
+    if (revealPos) {
+      if (!ALL_POS.includes(revealPos)) return this.err(ws, "BAD_REQUEST", "revealPos must be 1..6.");
+      if (pg.grid[revealPos].revealed) return this.err(ws, "BAD_STATE", "That card is already revealed.");
+    } else {
+      // If fd > 1, revealPos is required by rule
+      if (fd > 1) return this.err(ws, "MUST_REVEAL", "Discarding a drawn card requires revealing a face-down card.");
+    }
+
+    // Discard the drawn card
     g.discard.push(pg.pendingDraw);
     pg.pendingDraw = null;
 
-    // Rule #3:
-    // - If more than 1 face-down remains, you MUST reveal one face-down card (revealPos required)
-    // - If exactly 1 face-down remains, you should use PASS to avoid ending; DISCARD_DRAWN without revealPos is not allowed.
-    if (fdBefore > 1) {
-      if (!revealPos || !ALL_POS.includes(revealPos)) {
-        return this.err(ws, "MUST_REVEAL", "After discarding a drawn card, you must reveal one face-down card (revealPos).");
-      }
-      if (pg.grid[revealPos].revealed) {
-        return this.err(ws, "BAD_REQUEST", "revealPos is already revealed.");
-      }
+    // Reveal required card
+    if (revealPos) {
       pg.grid[revealPos].revealed = true;
-
-      // Reveal might trigger final turn if that was last face-down
-      this.maybeTriggerFinalTurn(who.id);
-    } else {
-      // fdBefore === 1 (or 0, but 0 shouldn't happen mid-round)
-      if (!revealPos) {
-        return this.err(ws, "USE_PASS", "You have 1 face-down card left. Use PASS if you don’t want to reveal it.");
-      }
-      if (!ALL_POS.includes(revealPos) || pg.grid[revealPos].revealed) {
-        return this.err(ws, "BAD_REQUEST", "Invalid revealPos for last card.");
-      }
-      pg.grid[revealPos].revealed = true;
+      // This could trigger final turn if it was the last face-down
       this.maybeTriggerFinalTurn(who.id);
     }
 
-    // End turn
     this.endTurnForPlayer(who.id);
 
     this.broadcastGameState();
@@ -711,33 +1010,23 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
     if (!pg || !g || !cfg) return;
 
     if (!this.isPlayersTurn(who.id)) return this.err(ws, "NOT_YOUR_TURN", "It is not your turn.");
-    if (!this.enforceInitialReveals(pg, ws)) return;
 
-    // PASS disabled during final turn per endConditions and passRule.disabledDuringFinalTurn
-    const passAllowedDuringFinalTurn = cfg.rulesJson?.endConditions?.roundEnd?.passAllowedDuringFinalTurn;
-    const passRuleDisabledDuringFinal = cfg.rulesJson?.passRule?.disabledDuringFinalTurn;
-
-    if (g.roundMeta.finalTurnActive && (passAllowedDuringFinalTurn === false || passRuleDisabledDuringFinal === true)) {
-      return this.err(ws, "PASS_DISABLED", "Pass is disabled during the final turn.");
-    }
+    // PASS disabled during final turn
+    if (g.roundMeta.finalTurnActive) return this.err(ws, "PASS_DISABLED", "Pass is disabled during the final turn.");
 
     const passRule = cfg.rulesJson?.passRule ?? {};
     if (!passRule.enabled) return this.err(ws, "PASS_DISABLED", "Pass is disabled.");
 
-    if (passRule.requiresDrawFirst && !pg.pendingDraw) {
-      return this.err(ws, "BAD_STATE", "Pass requires drawing a card first.");
-    }
+    if (passRule.requiresDrawFirst && !pg.pendingDraw) return this.err(ws, "BAD_STATE", "Pass requires drawing a card first.");
 
     if (passRule.requiresExactlyOneFaceDown) {
       const fd = this.faceDownCount(pg);
       if (fd !== 1) return this.err(ws, "BAD_STATE", `Pass requires exactly 1 face-down card. You have ${fd}.`);
     }
 
-    // PASS means: discard your drawn card without revealing last card
     g.discard.push(pg.pendingDraw!);
     pg.pendingDraw = null;
 
-    // End turn
     this.endTurnForPlayer(who.id);
 
     this.broadcastGameState();
@@ -750,7 +1039,12 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
 
   private buildNewGameFromRules(rulesJson: any, connectedPlayers: PlayerConn[]): GameState {
     const deckCount = Number(rulesJson?.gameVariant?.deckCount ?? 2);
-    const maxRounds = Number(rulesJson?.endConditions?.maxRounds ?? 9);
+
+    const mode: "holes" | "points" = rulesJson?.endConditions?.mode === "points" ? "points" : "holes";
+
+    // For holes, maxRounds is locked to 9.
+    // For points, we ignore maxRounds unless you later implement an optional cap; keep a large sentinel for UI legacy.
+    const maxRounds = mode === "holes" ? 9 : 9999;
 
     const shoe = this.buildShoe(deckCount);
     this.shuffleInPlace(shoe);
@@ -777,7 +1071,7 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
       cumulative[p.playerId] = 0;
     }
 
-    // Seed discard with one face-up card (traditional: first player may draw discard immediately)
+    // Seed discard with one face-up card
     const firstDiscard = shoe.pop();
     const discard = firstDiscard ? [firstDiscard] : [];
 
@@ -789,7 +1083,10 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
       maxRounds,
       turnOrder,
       currentTurnPlayerId: turnOrder.length > 0 ? turnOrder[0] : null,
-      roundMeta: {
+      turnDeadlineMs: null,
+turnTimeoutMs: TURN_TIMEOUT_MS,
+
+roundMeta: {
         finalTurnActive: false,
         finalTurnsRemaining: new Set<string>(),
         triggeredByPlayerId: null,
@@ -797,13 +1094,15 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
       scoreMeta: {
         lastRoundScores: null,
         cumulativeScores: cumulative,
+        winners: null,
+        endedReason: null,
       },
     };
   }
 
   private buildShoe(deckCount: number): Card[] {
-    const ranks: Rank[] = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"];
-    const suits: Suit[] = ["C","D","H","S"];
+    const ranks: Rank[] = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+    const suits: Suit[] = ["C", "D", "H", "S"];
 
     const shoe: Card[] = [];
     for (let d = 1; d <= deckCount; d++) {
@@ -817,7 +1116,9 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
   private shuffleInPlace<T>(arr: T[]) {
     for (let i = arr.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+      const tmp = arr[i];
+      arr[i] = arr[j];
+      arr[j] = tmp;
     }
   }
 
@@ -831,7 +1132,6 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
   }
 
   private columnScore(a: Card, b: Card, rulesJson: any): number {
-    // match = same rank (NOT same point value)
     if (rulesJson?.scoring?.columnMatchCancels && a.rank === b.rank) return 0;
     return this.cardValue(a.rank, rulesJson) + this.cardValue(b.rank, rulesJson);
   }
@@ -852,7 +1152,31 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
     const g = this.table.game;
     const cfg = this.table.config;
 
-    const maxRounds = g?.maxRounds ?? Number(cfg?.rulesJson?.endConditions?.maxRounds ?? 9);
+    const rulesJson = cfg?.rulesJson ?? {};
+    const mode: "holes" | "points" = rulesJson?.endConditions?.mode === "points" ? "points" : "holes";
+
+    const pointsTarget =
+      mode === "points" && typeof rulesJson?.endConditions?.pointsTarget === "number"
+        ? rulesJson.endConditions.pointsTarget
+        : null;
+
+    // rankValues (for UI)
+    const rv = rulesJson?.scoring?.rankValues ?? {};
+    const rankValues: Record<Rank, number> = {
+      A: typeof rv.A === "number" ? rv.A : 1,
+      "2": typeof rv["2"] === "number" ? rv["2"] : -2,
+      "3": typeof rv["3"] === "number" ? rv["3"] : 3,
+      "4": typeof rv["4"] === "number" ? rv["4"] : 4,
+      "5": typeof rv["5"] === "number" ? rv["5"] : 5,
+      "6": typeof rv["6"] === "number" ? rv["6"] : 6,
+      "7": typeof rv["7"] === "number" ? rv["7"] : 7,
+      "8": typeof rv["8"] === "number" ? rv["8"] : 8,
+      "9": typeof rv["9"] === "number" ? rv["9"] : 9,
+      "10": typeof rv["10"] === "number" ? rv["10"] : 10,
+      J: typeof rv.J === "number" ? rv.J : 10,
+      Q: typeof rv.Q === "number" ? rv.Q : 10,
+      K: typeof rv.K === "number" ? rv.K : 0,
+    };
 
     const playersPayload =
       this.table.players.map((p) => {
@@ -894,28 +1218,48 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
     const lastRoundScores = g?.scoreMeta.lastRoundScores ?? null;
     const cumulativeScores = g ? g.scoreMeta.cumulativeScores : null;
 
+    const matchOver = status === "ended";
+    const winners = g?.scoreMeta.winners ?? null;
+    const endedReason = g?.scoreMeta.endedReason ?? null;
+
     return {
       type: "GAME_STATE",
       payload: {
         tableId,
         status,
-        phase: this.table.phase,
+        phase: g ? "playing" : (cfg?.phase ?? "lobby"),
+
+        rulesSummary: {
+          mode,
+          pointsTarget,
+          maxRounds: mode === "holes" ? 9 : null,
+          rankValues,
+        },
+
+        // Turn timer (for countdown UX)
+        turnDeadlineMs: g?.turnDeadlineMs ?? null,
+        turnTimeoutMs: g?.turnTimeoutMs ?? 0,
+
 
         round: g?.round ?? 1,
-        maxRounds,
+        maxRounds: g?.maxRounds ?? (mode === "holes" ? 9 : 9999),
         currentTurnPlayerId: g?.currentTurnPlayerId ?? null,
 
-        drawCount: g?.shoe.length ?? 0,
-        discardTop: g && g.discard.length > 0 ? g.discard[g.discard.length - 1] : null,
+        drawCount: g?.shoe?.length ?? 0,
+        discardTop: g?.discard && g.discard.length > 0 ? g.discard[g.discard.length - 1] : null,
 
         pendingDraw,
 
-        finalTurnActive: g?.roundMeta.finalTurnActive ?? false,
-        finalTurnsRemainingCount: g?.roundMeta.finalTurnsRemaining.size ?? 0,
-        finalTurnTriggeredByPlayerId: g?.roundMeta.triggeredByPlayerId ?? null,
+        finalTurnActive: !!g?.roundMeta?.finalTurnActive,
+        finalTurnsRemainingCount: g?.roundMeta?.finalTurnsRemaining ? g.roundMeta.finalTurnsRemaining.size : 0,
+        finalTurnTriggeredByPlayerId: g?.roundMeta?.triggeredByPlayerId ?? null,
 
         lastRoundScores,
         cumulativeScores,
+
+        matchOver,
+        winners,
+        endedReason,
 
         you,
         players: playersPayload,
@@ -923,161 +1267,74 @@ private handleKick(ws: WebSocket, who: { id: string; role: Role }, targetId?: st
     };
   }
 
-  private broadcastGameState() {
-    for (const p of this.table.players) this.send(p.ws, this.makeGameStateMessage(p.playerId));
-    for (const s of this.table.spectators) this.send(s.ws, this.makeGameStateMessage(null));
-  }
-
-  // =========================
-  // TABLE_STATE + chat
-  // =========================
-
-  private broadcastState() {
-    const spectatorChatAllowed = this.table.config ? this.table.config.spectatorChatAllowed : true;
-    const tableId = this.table.config?.tableId ?? this.table.internalId;
-    const status: TableStatus = this.table.config?.status ?? "open";
-
-    const msg: ServerToClient = {
-      type: "TABLE_STATE",
-      payload: {
-        tableId,
-        status,
-        phase: this.table.phase,
-        ownerPlayerId: this.table.ownerPlayerId,
-        players: this.table.players.map((p) => ({ playerId: p.playerId, email: p.email, joinedAt: p.joinedAt })),
-        spectators: this.table.spectators.map((s) => ({ spectatorId: s.spectatorId, email: s.email, joinedAt: s.joinedAt })),
-        mutedPlayers: Array.from(this.table.mutedPlayers),
-        mutedSpectators: Array.from(this.table.mutedSpectators),
-        spectatorChatAllowed,
-      },
-    };
-
-    this.broadcast(msg);
-  }
-
-  private handleChat(ws: WebSocket, who: { id: string; role: Role; email: string }, text?: string) {
-    if (!this.table.config) return this.err(ws, "NO_TABLE", "Table config not loaded.");
-    if (!text) return this.err(ws, "BAD_REQUEST", "Missing chat text.");
-
-    const trimmed = text.trim();
-    if (!trimmed) return this.err(ws, "BAD_REQUEST", "Empty chat text.");
-    if (trimmed.length > CHAT_MAX_LEN) return this.err(ws, "BAD_REQUEST", `Chat too long (max ${CHAT_MAX_LEN}).`);
-
-    if (who.role === "spectator" && !this.table.config.spectatorChatAllowed) {
-      return this.err(ws, "CHAT_DISABLED", "Spectator chat is disabled for this table.");
-    }
-
-    if (who.role === "player" && this.table.mutedPlayers.has(who.id)) return this.err(ws, "MUTED", "You are muted.");
-    if (who.role === "spectator" && this.table.mutedSpectators.has(who.id)) return this.err(ws, "MUTED", "You are muted.");
-
-    const now = Date.now();
-    const last = this.lastChatAtBySocket.get(ws) ?? 0;
-    if (now - last < CHAT_RATE_MS) return this.err(ws, "RATE_LIMIT", "Too fast.");
-    this.lastChatAtBySocket.set(ws, now);
-
-    const msg: ChatMessage = {
-      id: makeEphemeralId("m"),
-      ts: new Date().toISOString(),
-      from: { id: who.id, role: who.role, email: who.email },
-      text: trimmed,
-    };
-
-    this.table.chat.push(msg);
-    if (this.table.chat.length > CHAT_MAX) this.table.chat.splice(0, this.table.chat.length - CHAT_MAX);
-
-    this.broadcast({ type: "CHAT_APPEND", payload: { message: msg } });
-  }
-
-  private broadcast(msg: ServerToClient) {
-    const s = JSON.stringify(msg);
-    for (const p of this.table.players) safeSend(p.ws, s);
-    for (const sp of this.table.spectators) safeSend(sp.ws, s);
-  }
-
-  private send(ws: WebSocket, msg: ServerToClient) {
-    safeSend(ws, JSON.stringify(msg));
-  }
-
-  private err(ws: WebSocket, code: string, message: string) {
-    this.send(ws, { type: "ERROR", payload: { code, message } });
-  }
-
-  // =========================
-  // Config + routing helpers
-  // =========================
-
-  private getTableIdForThisRequest(url: URL): string | null {
-    const param = (url.searchParams.get("table_id") ?? "").trim();
-    if (param) return param;
+// =========================
+// Durable Object alarm
+// =========================
+async alarm(): Promise<void> {
+  // 1) Try GC purge if table is stale/empty (existing behavior)
+  // 2) Then handle turn timeout if a game is running
+  try {
     // @ts-ignore
-    const name = (this.state.id as any)?.name;
-    if (typeof name === "string" && name.trim()) return name.trim();
-    return null;
+    if (typeof (this as any).tryPurgeIfStale === "function") {
+      // @ts-ignore
+      const purged = await (this as any).tryPurgeIfStale();
+      if (purged) return;
+    }
+  } catch {
+    // ignore and continue to turn timeout
   }
 
-  private async ensureConfigLoaded(tableId: string) {
-    if (this.table.config) return;
-
-    const row = await this.env.cardgolf
-      .prepare(`SELECT table_id, creator_player_id, rules_json, spectator_chat_allowed, status FROM tables WHERE table_id = ?`)
-      .bind(tableId)
-      .first<any>();
-
-    if (!row) { this.table.config = null; return; }
-
-    this.table.config = {
-      tableId: row.table_id,
-      creatorPlayerId: row.creator_player_id,
-      rulesJson: JSON.parse(row.rules_json),
-      spectatorChatAllowed: row.spectator_chat_allowed === 1,
-      status: (row.status ?? "open") as TableStatus,
-    };
-
-    if (!this.table.ownerPlayerId) this.table.ownerPlayerId = this.table.config.creatorPlayerId;
-    this.table.phase = this.table.config.status === "started" ? "playing" : "lobby";
-  }
-
-  private async refreshStatusFromD1(tableId: string) {
-    if (!this.table.config) return;
-    const row = await this.env.cardgolf.prepare(`SELECT status FROM tables WHERE table_id = ?`).bind(tableId).first<any>();
-    this.table.config.status = (row?.status ?? "open") as TableStatus;
+  try {
+    // @ts-ignore
+    if (typeof (this as any).handleTurnTimeoutIfDue === "function") {
+      // @ts-ignore
+      await (this as any).handleTurnTimeoutIfDue();
+    }
+  } catch {
+    await this.state.storage.setAlarm(Date.now() + 5000);
   }
 }
-
-function json(obj: unknown, status = 200) {
-  return new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json; charset=utf-8" } });
 }
 
-function safeSend(ws: WebSocket, data: string) {
-  try { if (ws.readyState === 1) ws.send(data); } catch {}
+// =========================
+// Small util helpers (unchanged)
+// =========================
+
+function json(obj: any, status: number) {
+  return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function readUserEmail(req: Request): string | null {
-  const url = new URL(req.url);
-  const host = url.hostname;
-  const isLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
-  if (isLocal) {
-    const devEmail = (url.searchParams.get("dev_email") ?? "").trim();
-    if (devEmail) return devEmail;
-  }
+function readUserEmail(request: Request): string | null {
+  const url = new URL(request.url);
+
+  // Local dev convenience: allow ?dev_email=
+  const dev = (url.searchParams.get("dev_email") ?? "").trim();
+  if (dev) return dev;
+
+  // Worker forwards caller identity to the DO using headers
   const h =
-    req.headers.get("cf-access-authenticated-user-email") ||
-    req.headers.get("Cf-Access-Authenticated-User-Email") ||
-    req.headers.get("x-forwarded-email") ||
-    req.headers.get("X-Forwarded-Email");
+    request.headers.get("cf-access-authenticated-user-email") ||
+    request.headers.get("Cf-Access-Authenticated-User-Email") ||
+    request.headers.get("x-forwarded-email") ||
+    request.headers.get("X-Forwarded-Email");
+
   return h ? h.trim() : null;
 }
 
 function makeStableId(email: string): string {
-  return "p_" + simpleHash(email.toLowerCase());
+  return "p_" + simpleHash(email);
 }
 
 function makeEphemeralId(prefix: string): string {
-  return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+  return prefix + "_" + Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2);
 }
 
 function simpleHash(s: string): string {
   let h = 2166136261;
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
   return (h >>> 0).toString(16);
 }
+

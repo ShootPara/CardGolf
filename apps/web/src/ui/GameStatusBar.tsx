@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 // FILE: /apps/web/src/ui/GameStatusBar.tsx (REPLACE)
 //
 // Changes:
@@ -12,6 +14,13 @@ type GameStatusBarProps = {
 };
 
 export function GameStatusBar({ tableState, gameState }: GameStatusBarProps) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const t = window.setInterval(() => setNowMs(Date.now()), 250);
+    return () => window.clearInterval(t);
+  }, []);
+
   const rules = gameState?.rulesSummary ?? {};
   const mode = rules?.mode === "points" ? "points" : "holes";
   const pointsTarget = typeof rules?.pointsTarget === "number" ? rules.pointsTarget : null;
@@ -29,6 +38,14 @@ export function GameStatusBar({ tableState, gameState }: GameStatusBarProps) {
   const curLabel = cur?.email ?? curPid ?? "—";
 
   const matchOver = !!gameState?.matchOver || gameState?.status === "ended";
+const turnDeadlineMs: number | null =
+  typeof gameState?.turnDeadlineMs === "number" ? gameState.turnDeadlineMs : null;
+const turnTimeoutMs: number =
+  typeof gameState?.turnTimeoutMs === "number" ? gameState.turnTimeoutMs : 0;
+
+const secsLeft =
+  !matchOver && turnDeadlineMs ? Math.max(0, Math.ceil((turnDeadlineMs - nowMs) / 1000)) : null;
+
   const winners: string[] | null = Array.isArray(gameState?.winners) ? gameState.winners : null;
   const endedReason = gameState?.endedReason ?? null;
 
@@ -107,7 +124,24 @@ export function GameStatusBar({ tableState, gameState }: GameStatusBarProps) {
           Final turn • remaining: {finalTurnsRemainingCount}
         </div>
       ) : (
-        <div style={{ opacity: 0.65, fontSize: 12 }}>Normal play</div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ opacity: 0.65, fontSize: 12 }}>Normal play</div>
+          {secsLeft != null ? (
+            <div
+              style={{
+                padding: "6px 10px",
+                borderRadius: 10,
+                background: "#1b1b1b",
+                border: "1px solid rgba(255,255,255,0.10)",
+                fontWeight: 800,
+                fontSize: 12,
+              }}
+              title={turnTimeoutMs ? `Turn timeout: ${Math.round(turnTimeoutMs / 1000)}s` : undefined}
+            >
+              Turn ends in {secsLeft}s
+            </div>
+          ) : null}
+        </div>
       )}
     </div>
   );
