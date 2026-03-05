@@ -50,6 +50,7 @@ export type MatchEndedReason =
 export type ClientToServer =
   | { type: "HELLO"; payload: { role: Role } }
   | { type: "CHAT_SEND"; payload: { text: string } }
+  | { type: "SET_DISPLAY_NAME"; payload: { displayName: string } }
   | { type: "OWNER_DELEGATE"; payload: { toPlayerId: string } }
   | { type: "MUTE"; payload: { targetId: string; targetRole: Role } }
   | { type: "UNMUTE"; payload: { targetId: string; targetRole: Role } }
@@ -74,7 +75,7 @@ export type ServerToClient =
       type: "WELCOME";
       payload: {
         tableId: string;
-        you: { playerId: string; email: string; role: Role };
+        you: { playerId: string; email: string; role: Role; displayName?: string | null };
         ownerPlayerId: string | null;
         spectatorChatAllowed: boolean;
       };
@@ -86,8 +87,8 @@ export type ServerToClient =
         status: TableStatus;
         phase: TablePhase;
         ownerPlayerId: string | null;
-        players: Array<{ playerId: string; email: string; joinedAt: string }>;
-        spectators: Array<{ spectatorId: string; email: string; joinedAt: string }>;
+        players: Array<{ playerId: string; email: string; displayName?: string | null; joinedAt: string }>;
+        spectators: Array<{ spectatorId: string; email: string; displayName?: string | null; joinedAt: string }>;
         mutedPlayers: string[];
         mutedSpectators: string[];
         spectatorChatAllowed: boolean;
@@ -108,7 +109,7 @@ export type ServerToClient =
         // Turn timer (for countdown UX)
         turnDeadlineMs: number | null;
         turnTimeoutMs: number;
-round: number;
+        round: number;
         maxRounds: number; // kept for backwards compatibility UI; in points mode this may be a large sentinel
         currentTurnPlayerId: string | null;
 
@@ -134,6 +135,7 @@ round: number;
 
         you: {
           playerId: string;
+          displayName?: string | null;
           grid: VisibleSlot[];
           faceDownCount: number;
           isYourTurn: boolean;
@@ -143,6 +145,7 @@ round: number;
         players: Array<{
           playerId: string;
           email: string;
+          displayName?: string | null;
           grid: VisibleSlot[];
           faceDownCount: number;
           initialRevealsRemaining: number;
@@ -159,7 +162,7 @@ round: number;
 export type ChatMessage = {
   id: string;
   ts: string;
-  from: { id: string; role: Role; email: string };
+  from: { id: string; role: Role; email: string; displayName?: string | null };
   text: string;
 };
 

@@ -35,7 +35,7 @@ export function GameStatusBar({ tableState, gameState }: GameStatusBarProps) {
 
   const players: any[] = Array.isArray(tableState?.players) ? tableState.players : [];
   const cur = players.find((p) => p?.playerId === curPid) ?? null;
-  const curLabel = cur?.email ?? curPid ?? "—";
+  const curLabel = (cur?.displayName ?? cur?.email ?? curPid ?? "—") as string;
 
   const matchOver = !!gameState?.matchOver || gameState?.status === "ended";
 const turnDeadlineMs: number | null =
@@ -51,7 +51,7 @@ const secsLeft =
 
   const winnerEmails =
     winners && winners.length
-      ? winners.map((pid) => (players.find((p) => p?.playerId === pid)?.email ?? pid)).join(", ")
+      ? winners.map((pid) => (players.find((p) => p?.playerId === pid)?.displayName ?? players.find((p) => p?.playerId === pid)?.email ?? pid)).join(", ")
       : null;
 
   function reasonLabel() {

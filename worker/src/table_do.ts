@@ -39,8 +39,8 @@ export interface Env {
   cardgolf: D1Database;
 }
 
-type PlayerConn = { playerId: string; email: string; role: "player"; ws: WebSocket; joinedAt: string };
-type SpectatorConn = { spectatorId: string; email: string; role: "spectator"; ws: WebSocket; joinedAt: string };
+type PlayerConn = { playerId: string; email: string; displayName?: string | null; role: "player"; ws: WebSocket; joinedAt: string };
+type SpectatorConn = { spectatorId: string; email: string; displayName?: string | null; role: "spectator"; ws: WebSocket; joinedAt: string };
 
 type TableConfig = {
   tableId: string;
@@ -229,14 +229,14 @@ export class TableDO {
       if (role === "player") {
         const playerId = makeStableId(userEmail);
         const joinedAt = new Date().toISOString();
-        this.table.players.push({ playerId, email: userEmail, role: "player", ws: server, joinedAt });
+        this.table.players.push({ playerId, email: userEmail, displayName: null, role: "player", ws: server, joinedAt });
         this.bindSocket(server, { id: playerId, role, email: userEmail });
 
         this.send(server, {
           type: "WELCOME",
           payload: {
             tableId: this.table.config.tableId,
-            you: { playerId, email: userEmail, role },
+            you: { playerId, email: userEmail, role, displayName: null },
             ownerPlayerId: this.table.ownerPlayerId,
             spectatorChatAllowed: this.table.config.spectatorChatAllowed,
           },
@@ -244,14 +244,14 @@ export class TableDO {
       } else {
         const spectatorId = makeEphemeralId("spec");
         const joinedAt = new Date().toISOString();
-        this.table.spectators.push({ spectatorId, email: userEmail, role: "spectator", ws: server, joinedAt });
+        this.table.spectators.push({ spectatorId, email: userEmail, displayName: null, role: "spectator", ws: server, joinedAt });
         this.bindSocket(server, { id: spectatorId, role, email: userEmail });
 
         this.send(server, {
           type: "WELCOME",
           payload: {
             tableId: this.table.config.tableId,
-            you: { playerId: spectatorId, email: userEmail, role },
+            you: { playerId: spectatorId, email: userEmail, role, displayName: null },
             ownerPlayerId: this.table.ownerPlayerId,
             spectatorChatAllowed: this.table.config.spectatorChatAllowed,
           },
@@ -299,6 +299,7 @@ export class TableDO {
 
     // Chat
     if (msg.type === "CHAT_SEND") return this.handleChatSend(ws, who, msg.payload?.text);
+    if (msg.type === "SET_DISPLAY_NAME") return this.handleSetDisplayName(ws, who, msg.payload?.displayName);
     if (msg.type === "PING") return this.send(ws, { type: "PONG" } as ServerToClient);
 
     // Turn loop
@@ -339,8 +340,8 @@ export class TableDO {
         status: this.table.config.status,
         phase: this.table.phase,
         ownerPlayerId: this.table.ownerPlayerId,
-        players: this.table.players.map((p) => ({ playerId: p.playerId, email: p.email, joinedAt: p.joinedAt })),
-        spectators: this.table.spectators.map((s) => ({ spectatorId: s.spectatorId, email: s.email, joinedAt: s.joinedAt })),
+        players: this.table.players.map((p) => ({ playerId: p.playerId, email: p.email, displayName: p.displayName ?? null, joinedAt: p.joinedAt })),
+        spectators: this.table.spectators.map((s) => ({ spectatorId: s.spectatorId, email: s.email, displayName: s.displayName ?? null, joinedAt: s.joinedAt })),
         mutedPlayers: [...this.table.mutedPlayers],
         mutedSpectators: [...this.table.mutedSpectators],
         spectatorChatAllowed: this.table.config.spectatorChatAllowed,
@@ -451,6 +452,46 @@ export class TableDO {
   // Chat
   // =========================
 
+  // =========================
+  // Display names (table-scoped)
+  // =========================
+
+  private getDisplayNameForId(id: string, role: Role): string | null {
+    if (role === "player") {
+      const p = this.table.players.find((x) => x.playerId === id);
+      return (p?.displayName ?? null) as any;
+    }
+    const s = this.table.spectators.find((x) => x.spectatorId === id);
+    return (s?.displayName ?? null) as any;
+  }
+
+  private handleSetDisplayName(ws: WebSocket, who: { id: string; role: Role; email: string }, displayName?: string) {
+    const raw = (displayName ?? "").trim();
+
+    // Treat empty string as clearing the name.
+    const cleaned = raw
+      ? raw
+          .replace(/[\u0000-\u001F\u007F]/g, "") // strip control chars
+          .slice(0, 24) // keep it short for UI
+      : "";
+
+    if (who.role === "player") {
+      const p = this.table.players.find((x) => x.playerId === who.id);
+      if (!p) return;
+      p.displayName = cleaned ? cleaned : null;
+    } else {
+      const s = this.table.spectators.find((x) => x.spectatorId === who.id);
+      if (!s) return;
+      s.displayName = cleaned ? cleaned : null;
+    }
+
+    // Update everyone immediately (names appear in multiple panels).
+    this.broadcastState();
+    if (this.table.config?.status === "started") this.broadcastGameState();
+
+  }
+
+
   private handleChatSend(ws: WebSocket, who: { id: string; role: Role; email: string }, text?: string) {
     if (!this.table.config) return;
 
@@ -473,7 +514,7 @@ export class TableDO {
     const msg: ChatMessage = {
       id: makeEphemeralId("m"),
       ts: new Date().toISOString(),
-      from: { id: who.id, role: who.role, email: who.email },
+      from: { id: who.id, role: who.role, email: who.email, displayName: this.getDisplayNameForId(who.id, who.role) },
       text: t,
     };
 
@@ -609,6 +650,7 @@ private async handleTurnTimeoutIfDue() {
   if (!pg) {
     this.advanceTurn();
     void this.markTurnStart();
+    void this.markTurnStart();
     this.broadcastGameState();
     this.broadcastState();
     return;
@@ -685,6 +727,7 @@ private async removePlayerFromLiveGame(playerId: string) {
 
   if (g.currentTurnPlayerId === playerId) {
     this.advanceTurn();
+    void this.markTurnStart();
   }
 
   if (cfg.status === "started" && g.turnOrder.length <= 1) {
@@ -725,10 +768,6 @@ private async removePlayerFromLiveGame(playerId: string) {
     }
 
     this.advanceTurn();
-
-    // IMPORTANT: reset the per-turn timeout whenever the current turn advances normally.
-    // Without this, the old deadline keeps counting down and will time out whoever is
-    // currently playing when it hits 0 (even if their turn just started).
     void this.markTurnStart();
   }
 

@@ -65,7 +65,7 @@ export function OwnerControlsPanel({ tableState, myPlayerId, wsStatus, wsSend }:
 
       <div style={{ display: "grid", gap: 12 }}>
         <div style={{ opacity: 0.8, fontSize: 12 }}>
-          Owner: <strong>{players.find((p) => p?.playerId === ownerPlayerId)?.email ?? ownerPlayerId ?? "—"}</strong>
+          Owner: <strong>{(players.find((p) => p?.playerId === ownerPlayerId)?.displayName ?? players.find((p) => p?.playerId === ownerPlayerId)?.email ?? ownerPlayerId ?? "—")}</strong>
         </div>
 
         {/* Players */}
@@ -74,7 +74,7 @@ export function OwnerControlsPanel({ tableState, myPlayerId, wsStatus, wsSend }:
 
           {players.map((p) => {
             const pid = p?.playerId;
-            const email = p?.email ?? pid;
+            const label = (p?.displayName ?? p?.email ?? pid) as string;
             const muted = pid ? isMuted("player", pid) : false;
             const canDelegate = pid && pid !== ownerPlayerId;
 
@@ -93,7 +93,7 @@ export function OwnerControlsPanel({ tableState, myPlayerId, wsStatus, wsSend }:
                 }}
               >
                 <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <div style={{ fontWeight: 800 }}>{email}</div>
+                  <div style={{ fontWeight: 800 }}>{label}</div>
                   {pid === ownerPlayerId ? <div style={{ opacity: 0.65, fontSize: 12 }}>owner</div> : null}
                   {muted ? <div style={{ opacity: 0.75, fontSize: 12 }}>muted</div> : null}
                 </div>
@@ -137,7 +137,7 @@ export function OwnerControlsPanel({ tableState, myPlayerId, wsStatus, wsSend }:
           ) : (
             spectators.map((s) => {
               const sid = s?.spectatorId;
-              const email = s?.email ?? sid;
+              const label = (s?.displayName ?? s?.email ?? sid) as string;
               const muted = sid ? isMuted("spectator", sid) : false;
 
               return (
@@ -155,7 +155,7 @@ export function OwnerControlsPanel({ tableState, myPlayerId, wsStatus, wsSend }:
                   }}
                 >
                   <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-                    <div style={{ fontWeight: 800 }}>{email}</div>
+                    <div style={{ fontWeight: 800 }}>{label}</div>
                     {muted ? <div style={{ opacity: 0.75, fontSize: 12 }}>muted</div> : null}
                   </div>
 

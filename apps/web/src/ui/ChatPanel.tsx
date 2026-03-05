@@ -66,7 +66,7 @@ export function ChatPanel({ chatState, disabled, onSend, title = "Chat" }: ChatP
             {messages.map((m, idx) => {
               // protocol.ts: ChatMessage { ts, from:{email}, text }
               const who =
-                m?.from?.email ??
+                m?.from?.displayName ?? m?.from?.email ??
                 m?.from?.id ??
                 m?.email ??
                 m?.playerId ??

@@ -36,7 +36,7 @@ export function PlayersPanel({ tableState, gameState }: PlayersPanelProps) {
     // Also include "you" if server doesn't include players array
     const you = gameState?.you;
     if (you?.playerId && !byId.has(you.playerId)) {
-      byId.set(you.playerId, { playerId: you.playerId, email: you.email, grid: you.grid });
+      byId.set(you.playerId, { playerId: you.playerId, email: you.email, displayName: you.displayName ?? null, grid: you.grid });
     }
     return Array.from(byId.values());
   })();
@@ -62,13 +62,13 @@ export function PlayersPanel({ tableState, gameState }: PlayersPanelProps) {
       <div style={{ display: "grid", gap: 10 }}>
         {merged.map((p) => {
           const pid = p?.playerId ?? "";
-          const email = p?.email ?? pid;
+          const label = (p?.displayName ?? p?.email ?? pid) as string;
           const score = cumulativeScores?.[pid] ?? 0;
           const isTurn = pid && currentTurnPlayerId && pid === currentTurnPlayerId;
 
           return (
             <div
-              key={pid || email}
+              key={pid || label}
               style={{
                 borderRadius: 12,
                 padding: 10,
@@ -80,7 +80,7 @@ export function PlayersPanel({ tableState, gameState }: PlayersPanelProps) {
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                 <div style={{ fontWeight: 800 }}>
-                  {email}
+                  {label}
                   {isTurn ? <span style={{ marginLeft: 8, opacity: 0.8 }}>(turn)</span> : null}
                 </div>
                 <div style={{ opacity: 0.85 }}>Score: <strong>{score}</strong></div>

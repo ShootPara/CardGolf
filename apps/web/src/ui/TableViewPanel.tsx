@@ -16,8 +16,9 @@ export function TableViewPanel({ tableState, gameState }: TableViewPanelProps) {
 
   const tablePlayers: any[] = Array.isArray(tableState?.players) ? tableState.players : [];
 
-  function emailFor(pid: string): string {
-    return tablePlayers.find((p) => p?.playerId === pid)?.email ?? pid;
+  function labelFor(pid: string): string {
+    const p = tablePlayers.find((pp) => pp?.playerId === pid);
+    return (p?.displayName ?? p?.email ?? pid) as string;
   }
 
   function scoreFor(pid: string): string | null {
@@ -71,7 +72,7 @@ export function TableViewPanel({ tableState, gameState }: TableViewPanelProps) {
               >
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
                   <div style={{ fontWeight: 900 }}>
-                    {pid ? emailFor(pid) : "Player"}
+                    {pid ? labelFor(pid) : "Player"}
                     {isTurn ? <span style={{ opacity: 0.8 }}> • turn</span> : null}
                   </div>
                   <div style={{ opacity: 0.75, fontSize: 12 }}>

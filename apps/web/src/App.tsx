@@ -32,7 +32,6 @@ import { OwnerControlsPanel } from "./ui/OwnerControlsPanel";
 
 import { TableViewPanel } from "./ui/TableViewPanel";
 import { ConfirmModal } from "./ui/ConfirmModal";
-import { HelpCard } from "./ui/HelpCard";
 /* ---------------------------------------------
  * Section: Types
  * --------------------------------------------- */
@@ -89,6 +88,7 @@ export default function App() {
   const [wsStatus, setWsStatus] = useState<string>("disconnected");
 
   const [myPlayerId, setMyPlayerId] = useState<string | null>(null);
+  const [displayNameDraft, setDisplayNameDraft] = useState<string>("");
   const [lastWsClose, setLastWsClose] = useState<{ code: number; reason: string } | null>(null);
 
   const [tableState, setTableState] = useState<any>(null);
@@ -279,7 +279,10 @@ export default function App() {
    * --------------------------------------------- */
 
   async function createTable() {
-    showNotice("warn", "devEmail required");
+    if (!devEmail || !devEmail.trim()) {
+      showNotice("warn", "devEmail required");
+      return;
+    }
     try {
       setLastError(null);
 
@@ -516,6 +519,53 @@ export default function App() {
                   </button>
                 </div>
 
+                {/* Your display name (Lobby) */}
+                <div style={{ marginTop: 12, background: "#111", border: "1px solid rgba(255,255,255,0.08)", padding: 12, borderRadius: 10 }}>
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>Your display name</div>
+                  <div style={{ opacity: 0.85, fontSize: 12, marginBottom: 8 }}>
+                    Shown to other players in this table only (not saved).
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <input
+                      style={{ minWidth: 240 }}
+                      value={displayNameDraft}
+                      placeholder={
+                        (() => {
+                          const me =
+                            tableState?.players?.find((p: any) => p?.playerId === myPlayerId) ??
+                            tableState?.spectators?.find((s: any) => s?.spectatorId === myPlayerId) ?? tableState?.spectators?.find((s: any) => s?.email === devEmail) ??
+                            null;
+                          return me?.displayName ?? me?.email ?? "Enter a name";
+                        })()
+                      }
+                      onChange={(e) => setDisplayNameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          wsSend("SET_DISPLAY_NAME", { displayName: displayNameDraft });
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={() => wsSend("SET_DISPLAY_NAME", { displayName: displayNameDraft })}
+                      disabled={wsStatus !== "connected" || !myPlayerId}
+                      title={wsStatus !== "connected" ? "Connect first" : !myPlayerId ? "Waiting for WELCOME" : ""}
+                    >
+                      Set Name
+                    </button>
+                    <button
+                      onClick={() => {
+                        setDisplayNameDraft("");
+                        wsSend("SET_DISPLAY_NAME", { displayName: "" });
+                      }}
+                      disabled={wsStatus !== "connected" || !myPlayerId}
+                      title="Clear display name"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
                 {/* Owner controls (Lobby) */}
                 <div style={{ marginTop: 12 }}>
                   <OwnerControlsPanel tableState={tableState} myPlayerId={myPlayerId} wsStatus={wsStatus} wsSend={wsSend} />
@@ -611,10 +661,6 @@ export default function App() {
                         onSend={(type, payload) => wsSend(type, payload)}
                       />
                     </div>
-
-<div style={{ marginTop: 12 }}>
-  <HelpCard tableState={tableState} gameState={gameState} />
-</div>
 
 <div style={{ marginTop: 12 }}>
   <TableViewPanel tableState={tableState} gameState={gameState} />
