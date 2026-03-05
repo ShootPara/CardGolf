@@ -32,6 +32,7 @@ import { OwnerControlsPanel } from "./ui/OwnerControlsPanel";
 
 import { TableViewPanel } from "./ui/TableViewPanel";
 import { ConfirmModal } from "./ui/ConfirmModal";
+import { HelpCard } from "./ui/HelpCard";
 /* ---------------------------------------------
  * Section: Types
  * --------------------------------------------- */
@@ -610,6 +611,10 @@ export default function App() {
                         onSend={(type, payload) => wsSend(type, payload)}
                       />
                     </div>
+
+<div style={{ marginTop: 12 }}>
+  <HelpCard tableState={tableState} gameState={gameState} />
+</div>
 
 <div style={{ marginTop: 12 }}>
   <TableViewPanel tableState={tableState} gameState={gameState} />
