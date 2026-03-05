@@ -725,6 +725,11 @@ private async removePlayerFromLiveGame(playerId: string) {
     }
 
     this.advanceTurn();
+
+    // IMPORTANT: reset the per-turn timeout whenever the current turn advances normally.
+    // Without this, the old deadline keeps counting down and will time out whoever is
+    // currently playing when it hits 0 (even if their turn just started).
+    void this.markTurnStart();
   }
 
   // =========================

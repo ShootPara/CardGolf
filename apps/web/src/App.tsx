@@ -31,6 +31,7 @@ import { CardValuesPanel } from "./ui/CardValuesPanel";
 import { OwnerControlsPanel } from "./ui/OwnerControlsPanel";
 
 import { TableViewPanel } from "./ui/TableViewPanel";
+import { ConfirmModal } from "./ui/ConfirmModal";
 /* ---------------------------------------------
  * Section: Types
  * --------------------------------------------- */
@@ -98,10 +99,44 @@ export default function App() {
   const [uiNotice, setUiNotice] = useState<{ kind: "info" | "warn"; text: string } | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
 
+  // --- Confirm modal (website-style, no native alert/confirm) ---
+  const [confirmModal, setConfirmModal] = useState<null | {
+    title: string;
+    body: string;
+    okText?: string;
+    cancelText?: string;
+    onOk: () => void;
+  }>(null);
+
+  function openConfirm(opts: { title: string; body: string; okText?: string; cancelText?: string; onOk: () => void }) {
+    setConfirmModal(opts);
+  }
+
+  function closeConfirm() {
+    setConfirmModal(null);
+  }
+
   function showNotice(kind: "info" | "warn", text: string) {
     setUiNotice({ kind, text });
     if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
     noticeTimerRef.current = window.setTimeout(() => setUiNotice(null), 3500);
+  }
+
+  function youFaceDownCount(gs: any): number {
+    const gridArr: any[] = Array.isArray(gs?.you?.grid) ? gs.you.grid : [];
+    let n = 0;
+    for (const c of gridArr) {
+      const visible = !!(c?.visible ?? c?.revealed);
+      if (!visible) n++;
+    }
+    return n;
+  }
+
+  function isYouFaceDownPos(gs: any, pos: any): boolean {
+    const gridArr: any[] = Array.isArray(gs?.you?.grid) ? gs.you.grid : [];
+    const cell = gridArr.find((c) => c?.pos === pos) ?? null;
+    const visible = !!(cell?.visible ?? cell?.revealed);
+    return !visible;
   }
 
   /* ---------------------------------------------
@@ -162,7 +197,7 @@ export default function App() {
 
   function connectWs() {
     if (!session?.tableId) {
-      alert("Enter a tableId first.");
+      showNotice("warn", "Enter a tableId first.");
       return;
     }
 
@@ -243,13 +278,14 @@ export default function App() {
    * --------------------------------------------- */
 
   async function createTable() {
-    if (!devEmail) return alert("devEmail required");
+    showNotice("warn", "devEmail required");
     try {
       setLastError(null);
 
       const built = buildRulesJsonFromSetup(tableSetup);
       if (!built.ok) {
-        alert("Fix Table Setup first:\n\n" + built.error);
+        showNotice("warn", "Fix Table Setup first (see Table Setup panel).");
+        setLastError(built.error);
         return;
       }
 
@@ -257,11 +293,12 @@ export default function App() {
 
       const newId = res?.table?.tableId ?? res?.tableId ?? res?.id;
       if (!newId) {
-        alert("Create succeeded but couldn't find tableId in response.\n\n" + pretty(res));
+      showNotice("warn", "Create succeeded but could not read tableId from response.");
+      setLastError(pretty(res));
         return;
       }
       setTableIdInput(String(newId));
-      alert(`Created table ${newId}`);
+      showNotice("info", `Created table ${newId}`);
     } catch (e: any) {
       setLastError(String(e?.message ?? e));
     }
@@ -304,6 +341,43 @@ export default function App() {
     <div style={{ padding: 16, maxWidth: 1200, margin: "0 auto" }}>
       <h2>CardGolf UI (Vite + React)</h2>
 
+      {/* Website-style modal confirmations (no native JS dialogs) */}
+      {confirmModal ? (
+        <ConfirmModal
+          title={confirmModal.title}
+          body={confirmModal.body}
+          okText={confirmModal.okText}
+          cancelText={confirmModal.cancelText}
+          onCancel={() => closeConfirm()}
+          onOk={() => confirmModal.onOk()}
+        />
+      ) : null}
+
+      {/* Small toast-style notice (replaces alert() UX) */}
+      {uiNotice ? (
+        <div
+          style={{
+            position: "fixed",
+            right: 16,
+            top: 16,
+            zIndex: 50,
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: uiNotice.kind === "warn" ? "rgba(180,80,60,0.95)" : "rgba(40,40,40,0.95)",
+            border: "1px solid rgba(255,255,255,0.15)",
+            color: "white",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+            maxWidth: 420,
+          }}
+          role="status"
+          aria-live="polite"
+          onClick={() => setUiNotice(null)}
+          title="Click to dismiss"
+        >
+          {uiNotice.text}
+        </div>
+      ) : null}
+
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
         <label>
           dev_email:&nbsp;
@@ -333,7 +407,7 @@ export default function App() {
                   role: "player",
                 });
                 await navigator.clipboard.writeText(url);
-                alert("Copied P2 join link");
+                  showNotice("info", "Copied P2 join link");
               }}
             >
               Copy P2 Join Link
@@ -347,7 +421,7 @@ export default function App() {
                   role: "spectator",
                 });
                 await navigator.clipboard.writeText(url);
-                alert("Copied spectator link");
+                  showNotice("info", "Copied spectator link");
               }}
             >
               Copy Spectator Link
@@ -490,6 +564,39 @@ export default function App() {
                         const initialRemaining = you?.initialRevealsRemaining ?? 0;
                         const pendingDraw = gameState?.pendingDraw ?? null;
                         if (pendingDraw != null && initialRemaining === 0) return;
+
+                        // Default click = REVEAL (post-gate reveals end your turn)
+                        const isPostGateReveal = initialRemaining === 0 && pendingDraw == null && intent == null;
+                        const isFaceDown = isYouFaceDownPos(gameState, pos);
+                        if (isPostGateReveal && isFaceDown) {
+                          const faceDownCount = youFaceDownCount(gameState);
+                          if (faceDownCount <= 1) {
+                            openConfirm({
+                              title: "End round?",
+                              body:
+                                "Revealing your last face-down card will end the round for everyone and trigger the final turn. It will also end your turn. Continue?",
+                              okText: "Reveal & End Round",
+                              cancelText: "Cancel",
+                              onOk: () => {
+                                wsSend("REVEAL", { pos });
+                                closeConfirm();
+                              },
+                            });
+                            return;
+                          }
+
+                          openConfirm({
+                            title: "End your turn?",
+                            body: "This will reveal the selected card and end your turn. Continue?",
+                            okText: "Reveal",
+                            cancelText: "Cancel",
+                            onOk: () => {
+                              wsSend("REVEAL", { pos });
+                              closeConfirm();
+                            },
+                          });
+                          return;
+                        }
 
                         wsSend("REVEAL", { pos });
                       }}
