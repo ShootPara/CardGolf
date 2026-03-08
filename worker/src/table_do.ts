@@ -281,14 +281,37 @@ export class TableDO {
     ws.addEventListener("close", () => this.onWsClose(ws, who));
   }
 
-  private onWsClose(ws: WebSocket, who: { id: string; role: Role; email: string }) {
-    if (who.role === "player") {
-      this.table.players = this.table.players.filter((p) => p.ws !== ws);
-    } else {
-      this.table.spectators = this.table.spectators.filter((s) => s.ws !== ws);
+  
+private onWsClose(ws: WebSocket, who: { id: string; role: Role; email: string }) {
+  if (who.role === "player") {
+    const leaving = this.table.players.find((p) => p.ws === ws) ?? null;
+    const leavingId = leaving?.playerId ?? null;
+
+    this.table.players = this.table.players.filter((p) => p.ws !== ws);
+    this.table.mutedPlayers.delete(leavingId ?? "");
+
+    // If the owner left, delegate to the oldest remaining connected player.
+    if (leavingId && this.table.ownerPlayerId === leavingId) {
+      const nextOwner = this.getOldestConnectedPlayerId(leavingId);
+      this.table.ownerPlayerId = nextOwner;
+      if (nextOwner) this.sendSystemChat(`Owner left. Ownership transferred.`);
     }
-    this.broadcastState();
+
+    // If a game is in progress, remove them from the live game structures.
+    if (leavingId && this.table.game) {
+      void this.removePlayerFromLiveGame(leavingId);
+    }
+  } else {
+    const leaving = this.table.spectators.find((s) => s.ws === ws) ?? null;
+    const leavingId = leaving?.spectatorId ?? null;
+
+    this.table.spectators = this.table.spectators.filter((s) => s.ws !== ws);
+    this.table.mutedSpectators.delete(leavingId ?? "");
   }
+
+  this.broadcastState();
+  if (this.table.game) this.broadcastGameState();
+}
 
   private onWsMessage(ws: WebSocket, who: { id: string; role: Role; email: string }, ev: MessageEvent) {
     const raw = typeof ev.data === "string" ? ev.data : "";
@@ -302,7 +325,14 @@ export class TableDO {
     if (msg.type === "SET_DISPLAY_NAME") return this.handleSetDisplayName(ws, who, msg.payload?.displayName);
     if (msg.type === "PING") return this.send(ws, { type: "PONG" } as ServerToClient);
 
-    // Turn loop
+    
+// Owner / moderation
+if (msg.type === "MUTE") return this.handleMute(ws, who, msg.payload?.targetId, msg.payload?.targetRole);
+if (msg.type === "UNMUTE") return this.handleUnmute(ws, who, msg.payload?.targetId, msg.payload?.targetRole);
+if (msg.type === "KICK") return this.handleKick(ws, who, msg.payload?.targetId, msg.payload?.targetRole);
+if (msg.type === "OWNER_DELEGATE") return this.handleOwnerDelegate(ws, who, msg.payload?.newOwnerPlayerId);
+
+// Turn loop
     if (msg.type === "REVEAL") return this.handleReveal(ws, who, msg.payload?.pos);
     if (msg.type === "DRAW_SHOE") return this.handleDrawShoe(ws, who);
     if (msg.type === "DRAW_DISCARD") return this.handleDrawDiscard(ws, who);
@@ -313,7 +343,94 @@ export class TableDO {
     return this.err(ws, "UNKNOWN", "Unknown message type");
   }
 
-  // =========================
+  
+// =========================
+// Owner / moderation
+// =========================
+
+private requireOwner(ws: WebSocket, who: { id: string; role: Role; email: string }): boolean {
+  if (!this.table.ownerPlayerId) return this.err(ws, "BAD_STATE", "No owner is set");
+  if (who.role !== "player") return this.err(ws, "FORBIDDEN", "Owner actions require player role");
+  if (this.table.ownerPlayerId !== who.id) return this.err(ws, "FORBIDDEN", "Only the table owner can do that");
+  return true;
+}
+
+// Oldest connected player (by joinedAt) excluding optional playerId.
+private getOldestConnectedPlayerId(excludePlayerId?: string | null): string | null {
+  const ex = excludePlayerId ?? null;
+  const candidates = (this.table.players ?? [])
+    .filter((p) => p?.playerId && p?.ws)
+    .filter((p) => (ex ? p.playerId !== ex : true))
+    .slice()
+    .sort((a, b) => {
+      const aj = Date.parse(a.joinedAt ?? "") || 0;
+      const bj = Date.parse(b.joinedAt ?? "") || 0;
+      return aj - bj;
+    });
+  return candidates.length ? (candidates[0].playerId as string) : null;
+}
+
+private handleMute(ws: WebSocket, who: { id: string; role: Role; email: string }, targetId?: string, targetRole?: Role) {
+  if (!this.requireOwner(ws, who)) return;
+  if (!targetId || !targetRole) return this.err(ws, "BAD_REQUEST", "Missing target");
+
+  if (targetRole === "player") this.table.mutedPlayers.add(targetId);
+  else this.table.mutedSpectators.add(targetId);
+
+  this.sendSystemChat(`${this.getDisplayNameForId(targetId, targetRole) ?? targetId} was muted.`);
+  this.broadcastState();
+}
+
+private handleUnmute(ws: WebSocket, who: { id: string; role: Role; email: string }, targetId?: string, targetRole?: Role) {
+  if (!this.requireOwner(ws, who)) return;
+  if (!targetId || !targetRole) return this.err(ws, "BAD_REQUEST", "Missing target");
+
+  if (targetRole === "player") this.table.mutedPlayers.delete(targetId);
+  else this.table.mutedSpectators.delete(targetId);
+
+  this.sendSystemChat(`${this.getDisplayNameForId(targetId, targetRole) ?? targetId} was unmuted.`);
+  this.broadcastState();
+}
+
+private handleKick(ws: WebSocket, who: { id: string; role: Role; email: string }, targetId?: string, targetRole?: Role) {
+  if (!this.requireOwner(ws, who)) return;
+  if (!targetId || !targetRole) return this.err(ws, "BAD_REQUEST", "Missing target");
+
+  // Owner cannot kick themselves.
+  if (targetRole === "player" && targetId === who.id) return this.err(ws, "FORBIDDEN", "Owner cannot kick themselves");
+
+  if (targetRole === "player") {
+    const p = this.table.players.find((x) => x.playerId === targetId) ?? null;
+    try { p?.ws?.close(4000, "kicked"); } catch {}
+    this.table.players = this.table.players.filter((x) => x.playerId !== targetId);
+    this.table.mutedPlayers.delete(targetId);
+
+    if (this.table.game) void this.removePlayerFromLiveGame(targetId);
+  } else {
+    const s = this.table.spectators.find((x) => x.spectatorId === targetId) ?? null;
+    try { s?.ws?.close(4000, "kicked"); } catch {}
+    this.table.spectators = this.table.spectators.filter((x) => x.spectatorId !== targetId);
+    this.table.mutedSpectators.delete(targetId);
+  }
+
+  this.sendSystemChat(`${this.getDisplayNameForId(targetId, targetRole) ?? targetId} was kicked.`);
+  this.broadcastState();
+  if (this.table.game) this.broadcastGameState();
+}
+
+private handleOwnerDelegate(ws: WebSocket, who: { id: string; role: Role; email: string }, newOwnerPlayerId?: string) {
+  if (!this.requireOwner(ws, who)) return;
+  if (!newOwnerPlayerId) return this.err(ws, "BAD_REQUEST", "Missing newOwnerPlayerId");
+
+  const exists = this.table.players.some((p) => p.playerId === newOwnerPlayerId);
+  if (!exists) return this.err(ws, "BAD_REQUEST", "New owner must be a connected player");
+
+  this.table.ownerPlayerId = newOwnerPlayerId;
+  this.sendSystemChat(`Ownership transferred.`);
+  this.broadcastState();
+}
+
+// =========================
   // Messaging helpers
   // =========================
 

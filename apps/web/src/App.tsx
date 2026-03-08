@@ -64,6 +64,7 @@ function buildJoinUrl(baseUrl: string, opts: { devEmail: string; tableId: string
  * --------------------------------------------- */
 
 export default function App() {
+  const showDebug = new URLSearchParams(window.location.search).get("debug") === "1";
   // ---- UI phase / session ----
   const [phase, setPhase] = useState<UiPhase>("HOME");
   const [devEmail, setDevEmail] = useState<string>("you@example.com");
@@ -671,13 +672,15 @@ export default function App() {
                   </>
                 ) : null}
 
-                {/* Debug */}
+                {showDebug ? (
                 <details style={{ marginTop: 12 }}>
                   <summary style={{ cursor: "pointer", opacity: 0.85 }}>GAME_STATE (debug)</summary>
                   <pre style={{ background: "#111", padding: 12, borderRadius: 8, overflowX: "auto", marginTop: 8 }}>
                     {gameState ? pretty(gameState) : "(waiting for GAME_STATE...)"}
                   </pre>
                 </details>
+              ) : null}
+
               </>
             ) : null}
           </div>
