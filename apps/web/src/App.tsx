@@ -574,12 +574,32 @@ export default function App() {
                 <div style={{ marginTop: 12 }}>
                   <OwnerControlsPanel tableState={tableState} myPlayerId={myPlayerId} wsStatus={wsStatus} wsSend={wsSend} />
                 </div>
-
-                <h4 style={{ marginTop: 12 }}>TABLE_STATE</h4>
-                <pre style={{ background: "#111", padding: 12, borderRadius: 8, overflowX: "auto" }}>
-                  {tableState ? pretty(tableState) : "(waiting for TABLE_STATE...)"}
-                </pre>
-              </>
+                {/* Debug-only: raw TABLE_STATE */}
+                {showDebug ? (
+                  <>
+                    <h4 style={{ marginTop: 12 }}>TABLE_STATE (debug)</h4>
+                    <pre style={{ background: "#111", padding: 12, borderRadius: 8, overflowX: "auto" }}>
+                      {tableState ? pretty(tableState) : "(waiting for TABLE_STATE...)"}
+                    </pre>
+                  </>
+                ) : (
+                  <div style={{ marginTop: 12, opacity: 0.85 }}>
+                    Table status: <strong>{tableState?.status ?? "…"}</strong>
+                    {Array.isArray(tableState?.players) ? (
+                      <span>
+                        {" "}
+                        • players: <strong>{tableState.players.length}</strong>
+                      </span>
+                    ) : null}
+                    {Array.isArray(tableState?.spectators) ? (
+                      <span>
+                        {" "}
+                        • spectators: <strong>{tableState.spectators.length}</strong>
+                      </span>
+                    ) : null}
+                  </div>
+                )}
+</>
             ) : null}
 
             {phase === "GAME" ? (

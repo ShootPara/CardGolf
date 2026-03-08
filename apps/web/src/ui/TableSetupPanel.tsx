@@ -184,8 +184,10 @@ export function buildRulesJsonFromSetup(setup: TableSetupState): { ok: true; rul
 export function TableSetupPanel(props: {
   value: TableSetupState;
   onChange: (next: TableSetupState) => void;
+  showDebug?: boolean;
 }) {
-  const { value, onChange } = props;
+  const { value, onChange, showDebug } = props;
+  const dbg = (showDebug ?? new URLSearchParams(window.location.search).get("debug") === "1");
 
   const preview = useMemo(() => {
     const built = buildRulesJsonFromSetup(value);
@@ -283,12 +285,14 @@ export function TableSetupPanel(props: {
             <strong>Setup error:</strong> {preview.error}
           </div>
         ) : (
-          <details>
+          dbg ? (
+            <details>
             <summary style={{ cursor: "pointer", opacity: 0.9 }}>rules_json preview (debug)</summary>
             <pre style={{ background: "#0c0c0c", padding: 10, borderRadius: 10, overflowX: "auto", marginTop: 8 }}>
               {JSON.stringify(preview.json, null, 2)}
             </pre>
           </details>
+          ) : null
         )}
       </div>
     </div>
