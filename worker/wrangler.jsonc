@@ -1,27 +1,25 @@
 /**
  * FILE: /worker/wrangler.jsonc (REPLACE)
  *
- * Updated to match the Golf spec:
- * - Worker name: cardgolf
- * - Durable Object class: TableDO
- * - Durable Object binding: TABLES
- * - Keeps your existing D1 binding: cardgolf
+ * Production deploy target:
+ *   https://cardgolf.unopenedparachute.workers.dev
  *
- * For more details on how to configure Wrangler, refer to:
- * https://developers.cloudflare.com/workers/wrangler/configuration/
+ * This Worker serves BOTH:
+ * - The React UI (static assets from ../apps/web/dist)
+ * - The backend API (/api/*) and WebSocket (/ws/*)
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
 
-  // Worker project name (safe to change now since you haven't deployed yet)
   "name": "cardgolf",
-
   "main": "src/index.ts",
   "compatibility_date": "2026-02-17",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": { "enabled": true },
 
   "migrations": [
     {
-      // Rename the DO class from MyDurableObject -> TableDO
       "new_sqlite_classes": ["TableDO"],
       "tag": "v1"
     }
@@ -30,43 +28,45 @@
   "durable_objects": {
     "bindings": [
       {
-        // Code will reference env.TABLES
         "class_name": "TableDO",
         "name": "TABLES"
       }
     ]
   },
 
-  "observability": { "enabled": true },
-
-  "compatibility_flags": ["nodejs_compat"],
-
-  // Your D1 database binding (kept as-is)
   "d1_databases": [
     {
       "binding": "cardgolf",
       "database_name": "cardgolf",
       "database_id": "b5c83992-9f4b-4bcf-a65c-e6eb6539b705"
     }
-  ]
+  ],
 
   /**
-   * Smart Placement
-   * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
+   * Static Assets (the Vite build output).
+   * Build first:
+   *   cd apps/web && npm ci && npm run build
+   *
+   * Then deploy:
+   *   cd worker && npx wrangler deploy
+   *
+   * not_found_handling = "single-page-application" makes deep links work (client-side routing).
+   */
+  "assets": {
+    "directory": "../apps/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  }
+
+  /**
+   * Optional: Smart Placement
+   * https://developers.cloudflare.com/workers/configuration/smart-placement/
    */
   // "placement": { "mode": "smart" }
 
   /**
-   * Environment Variables
+   * Optional: Environment vars (prefer wrangler secrets for sensitive values)
    * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
-   * Note: Use secrets to store sensitive data.
-   * https://developers.cloudflare.com/workers/configuration/secrets/
    */
-  // "vars": { "MY_VARIABLE": "production_value" }
-
-  /**
-   * Static Assets (not used for this backend Worker)
-   * https://developers.cloudflare.com/workers/static-assets/binding/
-   */
-  // "assets": { "directory": "./public/", "binding": "ASSETS" }
+  // "vars": { "ENV": "prod" }
 }
