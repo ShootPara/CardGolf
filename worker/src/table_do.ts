@@ -330,7 +330,7 @@ private onWsClose(ws: WebSocket, who: { id: string; role: Role; email: string })
 if (msg.type === "MUTE") return this.handleMute(ws, who, msg.payload?.targetId, msg.payload?.targetRole);
 if (msg.type === "UNMUTE") return this.handleUnmute(ws, who, msg.payload?.targetId, msg.payload?.targetRole);
 if (msg.type === "KICK") return this.handleKick(ws, who, msg.payload?.targetId, msg.payload?.targetRole);
-if (msg.type === "OWNER_DELEGATE") return this.handleOwnerDelegate(ws, who, msg.payload?.newOwnerPlayerId);
+if (msg.type === "OWNER_DELEGATE") return this.handleOwnerDelegate(ws, who, (msg as any).payload?.newOwnerPlayerId ?? (msg as any).payload?.toPlayerId);
 
 // Turn loop
     if (msg.type === "REVEAL") return this.handleReveal(ws, who, msg.payload?.pos);

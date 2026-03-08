@@ -51,7 +51,7 @@ export type ClientToServer =
   | { type: "HELLO"; payload: { role: Role } }
   | { type: "CHAT_SEND"; payload: { text: string } }
   | { type: "SET_DISPLAY_NAME"; payload: { displayName: string } }
-  | { type: "OWNER_DELEGATE"; payload: { toPlayerId: string } }
+  | { type: "OWNER_DELEGATE"; payload: { toPlayerId?: string; newOwnerPlayerId?: string } }
   | { type: "MUTE"; payload: { targetId: string; targetRole: Role } }
   | { type: "UNMUTE"; payload: { targetId: string; targetRole: Role } }
   | { type: "KICK"; payload: { targetId: string; targetRole: Role } }

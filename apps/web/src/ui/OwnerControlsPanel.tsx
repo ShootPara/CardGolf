@@ -44,7 +44,7 @@ export function OwnerControlsPanel({ tableState, myPlayerId, wsStatus, wsSend }:
   }
 
   function delegate(toPlayerId: string) {
-    wsSend("OWNER_DELEGATE", { toPlayerId });
+    wsSend("OWNER_DELEGATE", { newOwnerPlayerId: toPlayerId, toPlayerId });
   }
 
   return (

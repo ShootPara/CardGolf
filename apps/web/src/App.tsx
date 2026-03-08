@@ -200,16 +200,22 @@ export default function App() {
     }
   }
 
-  function connectWs() {
-    if (!session?.tableId) {
+  function connectWs(explicitTableId?: string) {
+    const tid = (explicitTableId ?? session?.tableId ?? "").toString().trim();
+    if (!tid) {
       showNotice("warn", "Enter a tableId first.");
       return;
     }
 
-    wsRef.current?.close();
+    const sessionToUse: DevSession = {
+      devEmail,
+      role,
+      tableId: tid,
+    };
+wsRef.current?.close();
     wsRef.current = null;
 
-    const ws = new CgWs(session, {
+    const ws = new CgWs(sessionToUse, {
       onOpen: () => setWsStatus("connected"),
       onClose: (ev) => {
         setWsStatus(`closed (${ev.code})`);
@@ -307,6 +313,9 @@ export default function App() {
       }
       setTableIdInput(String(newId));
       showNotice("info", `Created table ${newId}`);
+      // Immediately connect to the table we just created (do not rely on state timing).
+      setRole("player");
+      connectWs(String(newId));
     } catch (e: any) {
       setLastError(String(e?.message ?? e));
     }
@@ -347,7 +356,7 @@ export default function App() {
 
   return (
     <div style={{ padding: 16, maxWidth: 1200, margin: "0 auto" }}>
-      <h2>CardGolf UI (Vite + React)</h2>
+      <h2>Golf - The Card Game</h2>
 
       {/* Website-style modal confirmations (no native JS dialogs) */}
       {confirmModal ? (
@@ -386,63 +395,41 @@ export default function App() {
         </div>
       ) : null}
 
+      
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-        <label>
-          dev_email:&nbsp;
-          <input value={devEmail} onChange={(e) => setDevEmail(e.target.value)} style={{ width: 240 }} />
-        </label>
-
-        <label>
-          role:&nbsp;
-          <select value={role} onChange={(e) => setRole(e.target.value as any)}>
-            <option value="player">player</option>
-            <option value="spectator">spectator</option>
-          </select>
-        </label>
-
-        <label>
-          tableId:&nbsp;
-          <input value={tableIdInput} onChange={(e) => setTableIdInput(e.target.value)} style={{ width: 220 }} />
-        </label>
-
-        {tableIdInput ? (
-          <>
-            <button
-              onClick={async () => {
-                const url = buildJoinUrl(window.location.href, {
-                  devEmail: "p2@example.com",
-                  tableId: tableIdInput,
-                  role: "player",
-                });
-                await navigator.clipboard.writeText(url);
-                  showNotice("info", "Copied P2 join link");
-              }}
-            >
-              Copy P2 Join Link
-            </button>
-
-            <button
-              onClick={async () => {
-                const url = buildJoinUrl(window.location.href, {
-                  devEmail: "spectator@example.com",
-                  tableId: tableIdInput,
-                  role: "spectator",
-                });
-                await navigator.clipboard.writeText(url);
-                  showNotice("info", "Copied spectator link");
-              }}
-            >
-              Copy Spectator Link
-            </button>
-          </>
-        ) : null}
-
         <span style={{ opacity: 0.8 }}>ws: {wsStatus}</span>
-
         {phase !== "HOME" ? <button onClick={disconnectWs}>Disconnect</button> : null}
-      </div>
 
-      {lastError ? (
+        {showDebug ? (
+          <details style={{ marginLeft: 8 }}>
+            <summary style={{ cursor: "pointer", opacity: 0.85 }}>Dev (debug)</summary>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+              <label>
+                dev_email:&nbsp;
+                <input value={devEmail} onChange={(e) => setDevEmail(e.target.value)} style={{ width: 240 }} />
+              </label>
+
+              <label>
+                role:&nbsp;
+                <select value={role} onChange={(e) => setRole(e.target.value as any)}>
+                  <option value="player">player</option>
+                  <option value="spectator">spectator</option>
+                </select>
+              </label>
+
+              <label>
+                tableId:&nbsp;
+                <input value={tableIdInput} onChange={(e) => setTableIdInput(e.target.value)} style={{ width: 220 }} />
+              </label>
+
+              <button onClick={connectWs} disabled={!tableIdInput}>
+                Connect to Table
+              </button>
+            </div>
+          </details>
+        ) : null}
+      </div>
+{lastError ? (
         <pre style={{ background: "#331111", padding: 12, borderRadius: 8, marginTop: 12, overflowX: "auto" }}>
           ERROR:
           {"\n"}
@@ -470,12 +457,14 @@ export default function App() {
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={createTable}>Create Table</button>
-            <button onClick={connectWs} disabled={!tableIdInput}>
-              Connect to Table
-            </button>
+            {showDebug ? (
+              <button onClick={connectWs} disabled={!tableIdInput}>
+                Connect to Table
+              </button>
+            ) : null}
           </div>
 
-          <p style={{ opacity: 0.8, margin: 0 }}>Create/connect, then Lobby → Start → Game. Chat will appear after you connect.</p>
+          <p style={{ opacity: 0.8, margin: 0 }}>Configure your table and click Create — then invite your friends!</p>
         </div>
       ) : null}
 
@@ -521,7 +510,40 @@ export default function App() {
                   >
                     Start Game
                   </button>
+                
+                <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <button
+                    onClick={async () => {
+                      const url = buildJoinUrl(window.location.href, {
+                        devEmail: "p2@example.com",
+                        tableId: tableIdInput,
+                        role: "player",
+                      });
+                      await navigator.clipboard.writeText(url);
+                      showNotice("info", "Copied P2 join link");
+                    }}
+                    disabled={!tableIdInput}
+                  >
+                    Copy Player Invite Link
+                  </button>
+
+                  <button
+                    onClick={async () => {
+                      const url = buildJoinUrl(window.location.href, {
+                        devEmail: "spectator@example.com",
+                        tableId: tableIdInput,
+                        role: "spectator",
+                      });
+                      await navigator.clipboard.writeText(url);
+                      showNotice("info", "Copied spectator link");
+                    }}
+                    disabled={!tableIdInput}
+                  >
+                    Copy Spectator Invite Link
+                  </button>
                 </div>
+
+</div>
 
                 {/* Your display name (Lobby) */}
                 <div style={{ marginTop: 12, background: "#111", border: "1px solid rgba(255,255,255,0.08)", padding: 12, borderRadius: 10 }}>
@@ -574,32 +596,12 @@ export default function App() {
                 <div style={{ marginTop: 12 }}>
                   <OwnerControlsPanel tableState={tableState} myPlayerId={myPlayerId} wsStatus={wsStatus} wsSend={wsSend} />
                 </div>
-                {/* Debug-only: raw TABLE_STATE */}
-                {showDebug ? (
-                  <>
-                    <h4 style={{ marginTop: 12 }}>TABLE_STATE (debug)</h4>
-                    <pre style={{ background: "#111", padding: 12, borderRadius: 8, overflowX: "auto" }}>
-                      {tableState ? pretty(tableState) : "(waiting for TABLE_STATE...)"}
-                    </pre>
-                  </>
-                ) : (
-                  <div style={{ marginTop: 12, opacity: 0.85 }}>
-                    Table status: <strong>{tableState?.status ?? "…"}</strong>
-                    {Array.isArray(tableState?.players) ? (
-                      <span>
-                        {" "}
-                        • players: <strong>{tableState.players.length}</strong>
-                      </span>
-                    ) : null}
-                    {Array.isArray(tableState?.spectators) ? (
-                      <span>
-                        {" "}
-                        • spectators: <strong>{tableState.spectators.length}</strong>
-                      </span>
-                    ) : null}
-                  </div>
-                )}
-</>
+
+                <h4 style={{ marginTop: 12 }}>TABLE_STATE</h4>
+                <pre style={{ background: "#111", padding: 12, borderRadius: 8, overflowX: "auto" }}>
+                  {tableState ? pretty(tableState) : "(waiting for TABLE_STATE...)"}
+                </pre>
+              </>
             ) : null}
 
             {phase === "GAME" ? (
