@@ -7,9 +7,10 @@
  * - POST /api/table/:id/start
  * - GET  /ws/table/:tableId?role=player|spectator&dev_email=...
  *
- * Key ownership rule:
- * - Worker does NOT try to determine "current owner" (DO owns that).
- * - Worker forwards /start to the DO, passing caller email so the DO can authorize.
+ * Hotfix goals:
+ * - Never let /api/table/create throw an uncaught exception
+ * - Make the "save last table settings" players-table write best-effort only
+ * - Return clean JSON errors instead of Cloudflare 1101 HTML
  */
 
 import { TableDO, type Env } from "./table_do";
@@ -32,92 +33,118 @@ export default {
     ========================= */
 
     if (url.pathname === "/api/table/create" && request.method === "POST") {
-      const email = readUserEmail(request);
-      if (!email) return json({ ok: false, error: "Unauthorized (missing email)" }, 401);
+      try {
+        const email = readUserEmail(request);
+        if (!email) return json({ ok: false, error: "Unauthorized (missing email)" }, 401);
 
-      const body = await safeReadJson(request);
-      if (!body.ok) return json({ ok: false, error: "Invalid JSON body" }, 400);
+        const body = await safeReadJson(request);
+        if (!body.ok) return json({ ok: false, error: "Invalid JSON body" }, 400);
 
-      const rulesIn = body.value?.rules_json;
-      const validated = validateRulesJson(rulesIn);
-      if (!validated.ok) return json({ ok: false, error: validated.error }, 400);
+        const rulesIn = body.value?.rules_json;
+        const validated = validateRulesJson(rulesIn);
+        if (!validated.ok) return json({ ok: false, error: validated.error }, 400);
 
-      const rules = validated.value;
-      const spectatorChatAllowed = rules.uiOptions.allowSpectatorChat;
+        const rules = validated.value;
+        const spectatorChatAllowed = rules.uiOptions.allowSpectatorChat;
 
-      const creatorPlayerId = makeStableId(email);
-      const tableId = makeTableId();
+        const creatorPlayerId = makeStableId(email);
+        const tableId = makeTableId();
 
-      // Persist table config (creator is the initial owner by spec)
-      await env.cardgolf
-        .prepare(
-          `INSERT INTO tables (table_id, created_at, creator_player_id, rules_json, spectator_chat_allowed, status)
-           VALUES (?, datetime('now'), ?, ?, ?, 'open')`
-        )
-        .bind(tableId, creatorPlayerId, JSON.stringify(rules), spectatorChatAllowed ? 1 : 0)
-        .run();
+        // Essential write: the table row itself.
+        await env.cardgolf
+          .prepare(
+            `INSERT INTO tables (table_id, created_at, creator_player_id, rules_json, spectator_chat_allowed, status)
+             VALUES (?, datetime('now'), ?, ?, ?, 'open')`
+          )
+          .bind(tableId, creatorPlayerId, JSON.stringify(rules), spectatorChatAllowed ? 1 : 0)
+          .run();
 
-      // Save last table settings for creator (single preset)
-      await env.cardgolf
-        .prepare(
-          `INSERT INTO players (player_id, email, last_table_rules_json, created_at, updated_at)
-           VALUES (?, ?, ?, datetime('now'), datetime('now'))
-           ON CONFLICT(email) DO UPDATE SET
-             last_table_rules_json=excluded.last_table_rules_json,
-             updated_at=datetime('now')`
-        )
-        .bind(creatorPlayerId, email, JSON.stringify(rules))
-        .run();
+        // Non-essential write: save creator preset.
+        // This must never be allowed to break table creation in prod.
+        try {
+          await env.cardgolf
+            .prepare(
+              `INSERT INTO players (player_id, email, last_table_rules_json, created_at, updated_at)
+               VALUES (?, ?, ?, datetime('now'), datetime('now'))
+               ON CONFLICT(email) DO UPDATE SET
+                 last_table_rules_json=excluded.last_table_rules_json,
+                 updated_at=datetime('now')`
+            )
+            .bind(creatorPlayerId, email, JSON.stringify(rules))
+            .run();
+        } catch (presetErr) {
+          console.error("Create table: failed to save creator preset", errorToLogObject(presetErr));
+        }
 
-      const join = {
-        tableId,
-        wsPlayer: `/ws/table/${tableId}?role=player`,
-        wsSpectator: `/ws/table/${tableId}?role=spectator`,
-      };
+        const join = {
+          tableId,
+          wsPlayer: `/ws/table/${tableId}?role=player`,
+          wsSpectator: `/ws/table/${tableId}?role=spectator`,
+        };
 
-      return json({ ok: true, table: join }, 200);
+        return json({ ok: true, table: join }, 200);
+      } catch (err) {
+        console.error("Create table failed", errorToLogObject(err));
+        return json(
+          {
+            ok: false,
+            error: "Create table failed",
+            detail: errorMessage(err),
+          },
+          500
+        );
+      }
     }
 
     /* =========================
        Start table
     ========================= */
 
-    // POST /api/table/:id/start
     if (url.pathname.startsWith("/api/table/") && url.pathname.endsWith("/start") && request.method === "POST") {
-      const email = readUserEmail(request);
-      if (!email) return json({ ok: false, error: "Unauthorized (missing email)" }, 401);
+      try {
+        const email = readUserEmail(request);
+        if (!email) return json({ ok: false, error: "Unauthorized (missing email)" }, 401);
 
-      const parts = url.pathname.split("/").filter(Boolean); // ["api","table",":id","start"]
-      const tableId = parts.length === 4 ? parts[2] : "";
-      if (!tableId) return json({ ok: false, error: "Missing tableId" }, 400);
+        const parts = url.pathname.split("/").filter(Boolean); // ["api","table",":id","start"]
+        const tableId = parts.length === 4 ? parts[2] : "";
+        if (!tableId) return json({ ok: false, error: "Missing tableId" }, 400);
 
-      // Delegate authorization + D1 status update to the DO.
-      // This prevents "creator vs first-joiner" drift and supports delegation cleanly.
-      const id = env.TABLES.idFromName(tableId);
-      const stub = env.TABLES.get(id);
+        const id = env.TABLES.idFromName(tableId);
+        const stub = env.TABLES.get(id);
 
-      const doUrl = new URL("https://do.internal/start");
-      doUrl.searchParams.set("table_id", tableId);
+        const doUrl = new URL("https://do.internal/start");
+        doUrl.searchParams.set("table_id", tableId);
 
-      const doResp = await stub.fetch(doUrl.toString(), {
-        method: "POST",
-        headers: {
-          // Let DO authenticate consistently
-          "x-forwarded-email": email,
-        },
-      });
+        const doResp = await stub.fetch(doUrl.toString(), {
+          method: "POST",
+          headers: {
+            "x-forwarded-email": email,
+          },
+        });
 
-      // Pass through (best-effort JSON)
-      const text = await doResp.text();
-      const contentType = doResp.headers.get("content-type") ?? "";
+        const text = await doResp.text();
+        const contentType = doResp.headers.get("content-type") ?? "";
 
-      if (contentType.includes("application/json")) {
-        return new Response(text, { status: doResp.status, headers: { "content-type": contentType } });
+        if (contentType.includes("application/json")) {
+          return new Response(text, {
+            status: doResp.status,
+            headers: { "content-type": contentType },
+          });
+        }
+
+        if (doResp.ok) return json({ ok: true }, 200);
+        return json({ ok: false, error: text || "Start failed" }, doResp.status || 500);
+      } catch (err) {
+        console.error("Start table failed", errorToLogObject(err));
+        return json(
+          {
+            ok: false,
+            error: "Start table failed",
+            detail: errorMessage(err),
+          },
+          500
+        );
       }
-
-      // If DO returned text/plain etc, wrap in JSON for consistency
-      if (doResp.ok) return json({ ok: true }, 200);
-      return json({ ok: false, error: text || "Start failed" }, doResp.status || 500);
     }
 
     /* =========================
@@ -125,20 +152,30 @@ export default {
     ========================= */
 
     if (url.pathname.startsWith("/ws/table/")) {
-      const tableId = url.pathname.replace("/ws/table/", "").trim();
-      if (!tableId) return new Response("Missing tableId", { status: 400 });
+      try {
+        const tableId = url.pathname.replace("/ws/table/", "").trim();
+        if (!tableId) return new Response("Missing tableId", { status: 400 });
 
-      const id = env.TABLES.idFromName(tableId);
-      const stub = env.TABLES.get(id);
+        const id = env.TABLES.idFromName(tableId);
+        const stub = env.TABLES.get(id);
 
-      const doUrl = new URL(request.url);
-      doUrl.pathname = "/ws";
+        const doUrl = new URL(request.url);
+        doUrl.pathname = "/ws";
+        doUrl.searchParams.set("table_id", tableId);
 
-      // Pass tableId explicitly so DO doesn't depend on state.id.name
-      doUrl.searchParams.set("table_id", tableId);
-
-      const doReq = new Request(doUrl.toString(), request);
-      return stub.fetch(doReq);
+        const doReq = new Request(doUrl.toString(), request);
+        return stub.fetch(doReq);
+      } catch (err) {
+        console.error("WS route failed", errorToLogObject(err));
+        return json(
+          {
+            ok: false,
+            error: "WebSocket route failed",
+            detail: errorMessage(err),
+          },
+          500
+        );
+      }
     }
 
     return new Response("Not found", { status: 404 });
@@ -179,8 +216,7 @@ function readUserEmail(req: Request): string | null {
     if (devEmail) return devEmail;
   }
 
-  // Production: trust Cloudflare Access headers only.
-  // (Do NOT accept x-forwarded-email from the public internet.)
+  // Production: trust Cloudflare Access only.
   const h =
     req.headers.get("cf-access-authenticated-user-email") ||
     req.headers.get("Cf-Access-Authenticated-User-Email");
@@ -193,7 +229,6 @@ function makeStableId(email: string): string {
 }
 
 function makeTableId(): string {
-  // short, URL-friendly; good enough for v0
   return Math.random().toString(36).slice(2, 10) + "-" + Date.now().toString(36).slice(2, 8);
 }
 
@@ -204,4 +239,24 @@ function simpleHash(s: string): string {
     h = Math.imul(h, 16777619);
   }
   return (h >>> 0).toString(16);
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  try {
+    return String(err);
+  } catch {
+    return "Unknown error";
+  }
+}
+
+function errorToLogObject(err: unknown) {
+  if (err instanceof Error) {
+    return {
+      name: err.name,
+      message: err.message,
+      stack: err.stack ?? "",
+    };
+  }
+  return { value: errorMessage(err) };
 }
