@@ -9,7 +9,7 @@
  * - rankValues editor
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, } from "react";
 
 type EndMode = "holes" | "points";
 type RankKey = "A" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "J" | "Q" | "K";

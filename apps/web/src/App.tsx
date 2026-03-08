@@ -422,7 +422,7 @@ wsRef.current?.close();
                 <input value={tableIdInput} onChange={(e) => setTableIdInput(e.target.value)} style={{ width: 220 }} />
               </label>
 
-              <button onClick={connectWs} disabled={!tableIdInput}>
+              <button onClick={() => connectWs()} disabled={!tableIdInput}>
                 Connect to Table
               </button>
             </div>
@@ -458,7 +458,7 @@ wsRef.current?.close();
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={createTable}>Create Table</button>
             {showDebug ? (
-              <button onClick={connectWs} disabled={!tableIdInput}>
+              <button onClick={() => connectWs()} disabled={!tableIdInput}>
                 Connect to Table
               </button>
             ) : null}
