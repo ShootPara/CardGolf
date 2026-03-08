@@ -38,7 +38,8 @@
     {
       "binding": "cardgolf",
       "database_name": "cardgolf",
-      "database_id": "b5c83992-9f4b-4bcf-a65c-e6eb6539b705"
+      "database_id": "b5c83992-9f4b-4bcf-a65c-e6eb6539b705",
+      "migrations_dir": "../db/migrations"
     }
   ],
 
