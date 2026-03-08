@@ -18,7 +18,9 @@ export function TableViewPanel({ tableState, gameState }: TableViewPanelProps) {
 
   function labelFor(pid: string): string {
     const p = tablePlayers.find((pp) => pp?.playerId === pid);
-    return (p?.displayName ?? p?.email ?? pid) as string;
+    const idx = tablePlayers.findIndex((pp) => pp?.playerId === pid);
+    const fallback = idx >= 0 ? `Player ${idx + 1}` : "Player";
+    return (p?.displayName ?? fallback) as string;
   }
 
   function scoreFor(pid: string): string | null {

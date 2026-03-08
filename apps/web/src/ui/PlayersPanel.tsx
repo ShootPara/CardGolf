@@ -62,7 +62,9 @@ export function PlayersPanel({ tableState, gameState }: PlayersPanelProps) {
       <div style={{ display: "grid", gap: 10 }}>
         {merged.map((p) => {
           const pid = p?.playerId ?? "";
-          const label = (p?.displayName ?? p?.email ?? pid) as string;
+          const idx = tsPlayers.findIndex((pp) => pp?.playerId === pid);
+          const fallback = idx >= 0 ? `Player ${idx + 1}` : "Player";
+          const label = (p?.displayName ?? fallback) as string;
           const score = cumulativeScores?.[pid] ?? 0;
           const isTurn = pid && currentTurnPlayerId && pid === currentTurnPlayerId;
 

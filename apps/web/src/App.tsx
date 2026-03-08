@@ -172,9 +172,12 @@ export default function App() {
         setIntent(null);
         break;
 
-      case "WELCOME":
-        setMyPlayerId((msg as any)?.payload?.you?.playerId ?? null);
+      case "WELCOME": {
+        const you = (msg as any)?.payload?.you ?? null;
+        // player joins provide playerId; spectator joins provide spectatorId
+        setMyPlayerId(you?.playerId ?? you?.spectatorId ?? null);
         break;
+      }
 
       case "ERROR": {
         const p: any = (msg as any).payload ?? (msg as any).error ?? msg;

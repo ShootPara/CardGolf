@@ -66,9 +66,12 @@ export function ChatPanel({ chatState, disabled, onSend, title = "Chat" }: ChatP
             {messages.map((m, idx) => {
               // protocol.ts: ChatMessage { ts, from:{email}, text }
               const who =
-                m?.from?.displayName ?? m?.from?.email ??
+                m?.from?.displayName ??
+                m?.from?.label ??
+                m?.from?.name ??
+                // Avoid showing raw emails in the normal UI; fall back to role-ish labels.
+                (m?.from?.role ? String(m.from.role) : null) ??
                 m?.from?.id ??
-                m?.email ??
                 m?.playerId ??
                 "someone";
 
