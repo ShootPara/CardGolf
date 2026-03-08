@@ -1,29 +1,30 @@
 // FILE: /apps/web/vite.config.ts (REPLACE)
-import { defineConfig } from "vite";
+//
+// Dev-only proxy to local wrangler.
+// Production build uses same-origin /api/* and /ws/* (no proxy).
+
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Local worker dev endpoints (wrangler dev)
-// HTTP: http://127.0.0.1:8787
-// WS:   ws://127.0.0.1:8787
-const WORKER_HTTP = "http://127.0.0.1:8787";
-const WORKER_WS = "ws://127.0.0.1:8787";
+const DEFAULT_WORKER_HTTP = "http://127.0.0.1:8787";
+const DEFAULT_WORKER_WS = "ws://127.0.0.1:8787";
 
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    proxy: {
-      // REST API
-      "/api": {
-        target: WORKER_HTTP,
-        changeOrigin: true,
-      },
+export default defineConfig(({ mode, command }) => {
+  const env = loadEnv(mode, process.cwd(), "");
 
-      // WebSocket
-      "/ws": {
-        target: WORKER_WS,
-        ws: true,
-        changeOrigin: true,
-      },
-    },
-  },
+  const WORKER_HTTP = env.VITE_WORKER_HTTP || DEFAULT_WORKER_HTTP;
+  const WORKER_WS = env.VITE_WORKER_WS || DEFAULT_WORKER_WS;
+
+  return {
+    plugins: [react()],
+    server:
+      command === "serve"
+        ? {
+            proxy: {
+              "/api": { target: WORKER_HTTP, changeOrigin: true },
+              "/ws": { target: WORKER_WS, ws: true, changeOrigin: true },
+            },
+          }
+        : undefined,
+  };
 });

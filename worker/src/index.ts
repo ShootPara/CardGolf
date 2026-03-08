@@ -179,11 +179,12 @@ function readUserEmail(req: Request): string | null {
     if (devEmail) return devEmail;
   }
 
+  // Production: trust Cloudflare Access headers only.
+  // (Do NOT accept x-forwarded-email from the public internet.)
   const h =
     req.headers.get("cf-access-authenticated-user-email") ||
-    req.headers.get("Cf-Access-Authenticated-User-Email") ||
-    req.headers.get("x-forwarded-email") ||
-    req.headers.get("X-Forwarded-Email");
+    req.headers.get("Cf-Access-Authenticated-User-Email");
+
   return h ? h.trim() : null;
 }
 

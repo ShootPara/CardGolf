@@ -1469,17 +1469,29 @@ function readUserEmail(request: Request): string | null {
   const url = new URL(request.url);
 
   // Local dev convenience: allow ?dev_email=
-  const dev = (url.searchParams.get("dev_email") ?? "").trim();
-  if (dev) return dev;
+  const host = url.hostname;
+  const isLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
+  if (isLocal) {
+    const dev = (url.searchParams.get("dev_email") ?? "").trim();
+    if (dev) return dev;
+  }
 
-  // Worker forwards caller identity to the DO using headers
-  const h =
+  // Cloudflare Access (production)
+  const accessEmail =
     request.headers.get("cf-access-authenticated-user-email") ||
-    request.headers.get("Cf-Access-Authenticated-User-Email") ||
-    request.headers.get("x-forwarded-email") ||
-    request.headers.get("X-Forwarded-Email");
+    request.headers.get("Cf-Access-Authenticated-User-Email");
+  if (accessEmail) return accessEmail.trim();
 
-  return h ? h.trim() : null;
+  // Internal Worker -> DO calls use a synthetic hostname.
+  // Allow x-forwarded-email ONLY for that internal hop.
+  if (host === "do.internal") {
+    const fwd =
+      request.headers.get("x-forwarded-email") ||
+      request.headers.get("X-Forwarded-Email");
+    return fwd ? fwd.trim() : null;
+  }
+
+  return null;
 }
 
 function makeStableId(email: string): string {
