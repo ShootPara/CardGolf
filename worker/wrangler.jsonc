@@ -1,7 +1,8 @@
 /**
  * FILE: /worker/wrangler.jsonc (REPLACE)
  *
- * Production deploy target:
+ * Production deploy targets:
+ *   https://cardgolf.slopcopy.com
  *   https://cardgolf.unopenedparachute.workers.dev
  *
  * This Worker serves BOTH:
@@ -57,7 +58,19 @@
     "directory": "../apps/web/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
-  }
+  },
+
+  /**
+   * Custom domain for the public CardGolf app.
+   * Cloudflare will create/manage the DNS + certificate when deployed,
+   * as long as slopcopy.com is in this Cloudflare account/zone.
+   */
+  "routes": [
+    {
+      "pattern": "cardgolf.slopcopy.com",
+      "custom_domain": true
+    }
+  ]
 
   /**
    * Optional: Smart Placement
